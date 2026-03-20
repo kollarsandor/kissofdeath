@@ -1,11 +1,36 @@
 Root-level LLM with its own architecture, runtime, hardware, tokenizer, optimizer, training data pipeline, deployment system, and formal security proof 
 build on KGRU (Kalmár László - Gábor Dénes - Riesz Frigyes unity)
 
-
-
 ---
 
- Projektszintű áttekintés
+Kalmár László (K): A magyar kibernetika, a számítástudomány és a matematikai logika atyja. Az ő szellemisége tükröződik a projekt logikai szigorában, a verify.saw fájlban látható Z3 SMT solverrel végzett matematikai verifikációkban és a típuselméleti (type_theory.zig) alapokban. Ő képviseli a hibátlan, formálisan bizonyított algoritmikus működést.
+
+Gábor Dénes (G): Az információelmélet úttörője, a holográfia (hullámfront-rekonstrukció) Nobel-díjas feltalálója. Az ő munkássága jelenik meg a rendszer információ-terjedési modelljeiben (signal_propagation.zig), az adatok transzformációjában és a reprezentációs terek (RSF) működésében. Ő képviseli az információ sűrítését és a jelek terjedését.
+
+Riesz Frigyes (R): A funkcionálanalízis egyik megalkotója. A Riesz-féle reprezentációs tétel és a Hilbert-terek elmélete a modern kvantummechanika tiszta matematikai alapját jelentik. A Jaide kvantumállapot-kezelése (quantum_logic.zig), végtelen dimenziós tenzorműveletei (tensor.zig) és gráf-alapú összefonódásai közvetlenül az általa lefektetett alapokon nyugszanak.
+
+Unity (U) - Egység: A klasszikus számítástechnika (Kalmár), az információ/hullám-fizika (Gábor) és a kvantum-matematika (Riesz) szintetizálása egyetlen működő, bit-szinten verifikált AI keretrendszerben (JAIDE v40).
+
+
+A Kgru tesztfolyamat pontosan 5 fő fázison (teszten) megy keresztül, amelyeket lépésről lépésre naplóz a konzolon:
+1. RSF (Representation Space Formatter) inicializálás és előreterjesztés (Forward Pass):
+Létrehoz egy neurális hálózati modellt, betölti egy szintetikus tenzorral (véletlenszerű adatokkal), majd lefuttatja a hálózaton. A teszt csak akkor sikeres, ha a kimeneti adatok matematikai szempontból érvényesek, azaz nem adnak vissza végtelent (Infinity) vagy értelmezhetetlen értéket (NaN).
+2. SFD (Optimizer) inicializálás és frissítés:
+A rendszer optimalizáló algoritmusának tesztje. Létrehoz egy paraméter- és egy gradiens-tenzort, majd a tanulási ráta (learning rate) alkalmazásával megkísérli frissíteni a súlyokat. A teszt ellenőrzi, hogy a tanulási lépés (update) hatására a paraméterek valóban, mérhető módon megváltoztak-e.
+3. MGT (Tokenizer) inicializálás:
+A nyelvi modellt kiszolgáló tokenizáló (amely a szöveget a gép számára értelmezhető számokká alakítja) betöltésének ellenőrzése. A teszt megvizsgálja, hogy a betöltött szótár (vocabulary) nem maradt-e üresen.
+4. SSI (Semantic Space Index) adatbázis műveletek:
+A rendszer szemantikus keresőjének és memóriájának tesztje. Próba-szekvenciákat táplál a hálózatba, majd ellenőrzi, hogy az adatszerkezet (valószínűleg egy fa vagy fa-szerű gráf) sikeresen létrehozta-e a megfelelő keresési csomópontokat.
+5. Ranker inicializálás:
+Az SSI-ből kinyert találatokat rangsoroló algoritmus tesztje. Ellenőrzi az N-grammok és a Lokalitás Érzékeny Hashing (LSH) táblák memóriabiztos betöltését a megfelelő véletlenszám-generátor (seed) mellett.
+
+
+
+
+
+
+
+Projektszintű áttekintés
 
 A JAIDE (v40) egy gyökérszintű LLM-rendszer, amely a KGRU (Kalmár László–Gábor Dénes–Riesz Frigyes-egység) építészeti filozófiájára épül. Egy vertikálisan integrált technológiai készletet képvisel, amely magában foglal egy egyedi neurális architektúrát, egy dedikált relációs motort, hardveres gyorsítókerneleket és egy átfogó formális verifikációs csomagot.
 
