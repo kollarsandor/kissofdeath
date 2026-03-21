@@ -4,7 +4,6 @@ const math = std.math;
 const Allocator = mem.Allocator;
 const types = @import("../core/types.zig");
 const BitSet = types.BitSet;
-const PRNG = types.PRNG;
 const Tensor = @import("../core/tensor.zig").Tensor;
 const SSI = @import("../index/ssi.zig").SSI;
 const stableHash = @import("../core/io.zig").stableHash;
@@ -24,6 +23,22 @@ pub const RankerConfig = struct {
     pub const OVERLAP_WEIGHT: f32 = 0.3;
     pub const JACCARD_WEIGHT: f32 = 0.3;
 };
+
+fn tokenToLEBytes(token: u32) [4]u8 {
+    return mem.toBytes(mem.nativeToLittle(u32, token));
+}
+
+fn tokensToLEBytes(allocator: Allocator, tokens: []const u32) ![]u8 {
+    const buf = try allocator.alloc(u8, tokens.len * 4);
+    for (tokens, 0..) |token, i| {
+        const le = tokenToLEBytes(token);
+        buf[i * 4 + 0] = le[0];
+        buf[i * 4 + 1] = le[1];
+        buf[i * 4 + 2] = le[2];
+        buf[i * 4 + 3] = le[3];
+    }
+    return buf;
+}
 
 pub const Ranker = struct {
     ngram_weights: []f32,
@@ -77,20 +92,23 @@ pub const Ranker = struct {
 
         var ngram_score: f32 = 0.0;
         var gram: usize = 1;
-        while (gram < @min(self.num_ngrams, tokens.len + 1)) : (gram += 1) {
-            if (tokens.len < gram) continue;
+        while (gram <= @min(self.num_ngrams, tokens.len)) : (gram += 1) {
             var start: usize = 0;
-            while (start < tokens.len - gram + 1) : (start += 1) {
+            while (start <= tokens.len - gram) : (start += 1) {
                 const ngram = tokens[start .. start + gram];
-                const h = stableHash(mem.sliceAsBytes(ngram), self.seed);
+                const le_bytes = try tokensToLEBytes(self.allocator, ngram);
+                defer self.allocator.free(le_bytes);
+                const h = stableHash(le_bytes, self.seed);
                 if (ssi.getSegment(h)) |s| {
-                    const weight_idx = @min(gram - 1, self.ngram_weights.len - 1);
-                    ngram_score += self.ngram_weights[weight_idx] * s.score;
+                    if (!math.isNan(s.score) and !math.isInf(s.score)) {
+                        const weight_idx = @min(gram - 1, self.ngram_weights.len - 1);
+                        ngram_score += self.ngram_weights[weight_idx] * s.score;
+                    }
                 }
             }
         }
 
-        const diversity_score = self.computeTokenDiversity(tokens);
+        const diversity_score = try self.computeTokenDiversity(tokens);
         const proximity = self.anchorProximity(tokens, ssi);
 
         var raw_score = ngram_score + RankerConfig.DIVERSITY_WEIGHT * diversity_score + RankerConfig.PROXIMITY_WEIGHT * proximity;
@@ -102,20 +120,20 @@ pub const Ranker = struct {
         const base_score = try self.scoreSequence(tokens, ssi);
 
         const token_overlap = self.computeTokenOverlap(tokens, query);
-        const jaccard = self.computeJaccardSimilarity(tokens, query);
+        const jaccard = try self.computeJaccardSimilarity(tokens, query);
 
         const combined_score = base_score * RankerConfig.BASE_SCORE_WEIGHT + token_overlap * RankerConfig.OVERLAP_WEIGHT + jaccard * RankerConfig.JACCARD_WEIGHT;
         return math.clamp(combined_score, 0.0, 1.0);
     }
 
-    fn computeTokenDiversity(self: *const Ranker, tokens: []const u32) f32 {
+    fn computeTokenDiversity(self: *const Ranker, tokens: []const u32) !f32 {
         if (tokens.len == 0) return 0.0;
 
         var unique_tokens = std.AutoHashMap(u32, void).init(self.allocator);
         defer unique_tokens.deinit();
 
         for (tokens) |token| {
-            unique_tokens.put(token, {}) catch continue;
+            try unique_tokens.put(token, {});
         }
 
         const unique_count = unique_tokens.count();
@@ -124,8 +142,7 @@ pub const Ranker = struct {
         return diversity;
     }
 
-    fn computeTokenOverlap(self: *const Ranker, tokens: []const u32, query: []const u32) f32 {
-        _ = self;
+    fn computeTokenOverlap(_: *const Ranker, tokens: []const u32, query: []const u32) f32 {
         if (tokens.len == 0 or query.len == 0) return 0.0;
 
         var overlap: usize = 0;
@@ -142,7 +159,7 @@ pub const Ranker = struct {
         return @as(f32, @floatFromInt(overlap)) / @as(f32, @floatFromInt(max_len));
     }
 
-    fn computeJaccardSimilarity(self: *const Ranker, tokens: []const u32, query: []const u32) f32 {
+    fn computeJaccardSimilarity(self: *const Ranker, tokens: []const u32, query: []const u32) !f32 {
         if (tokens.len == 0 and query.len == 0) return 1.0;
         if (tokens.len == 0 or query.len == 0) return 0.0;
 
@@ -153,16 +170,16 @@ pub const Ranker = struct {
         defer seen.deinit();
 
         for (tokens) |token| {
-            seen.put(token, 1) catch continue;
+            try seen.put(token, 1);
         }
 
         for (query) |qtoken| {
             if (seen.get(qtoken)) |val| {
                 if (val == 1) {
-                    seen.put(qtoken, 2) catch continue;
+                    try seen.put(qtoken, 2);
                 }
             } else {
-                seen.put(qtoken, 1) catch continue;
+                try seen.put(qtoken, 1);
             }
         }
 
@@ -179,16 +196,16 @@ pub const Ranker = struct {
     }
 
     fn anchorProximity(self: *const Ranker, tokens: []const u32, ssi: *const SSI) f32 {
-        _ = self;
         if (tokens.len == 0) return 0.0;
 
         var anchors: usize = 0;
         var total_dist: f32 = 0.0;
         var i: usize = 0;
         while (i < tokens.len) : (i += 1) {
-            const pos: u64 = @intCast(i);
-            if (ssi.getSegment(pos)) |s| {
-                if (s.anchor_hash != 0) {
+            const le_bytes = tokenToLEBytes(tokens[i]);
+            const h = stableHash(&le_bytes, self.seed);
+            if (ssi.getSegment(h)) |s| {
+                if (s.anchor) {
                     anchors += 1;
                     const i_u64: u64 = @intCast(i);
                     const raw_dist: u64 = if (i_u64 > s.position) i_u64 - s.position else s.position - i_u64;
@@ -240,6 +257,7 @@ pub const Ranker = struct {
 
         var sorted_tokens = try allocator.alloc([]u32, candidates.len);
         defer allocator.free(sorted_tokens);
+        @memset(sorted_tokens, &[_]u32{});
 
         var sorted_scores = try allocator.alloc(f32, candidates.len);
         defer allocator.free(sorted_scores);
@@ -250,10 +268,19 @@ pub const Ranker = struct {
         var sorted_anchors = try allocator.alloc(bool, candidates.len);
         defer allocator.free(sorted_anchors);
 
+        var dup_count: usize = 0;
+        errdefer {
+            var d: usize = 0;
+            while (d < dup_count) : (d += 1) {
+                allocator.free(sorted_tokens[d]);
+            }
+        }
+
         i = 0;
         while (i < candidates.len) : (i += 1) {
             const src_idx = indices[i];
             sorted_tokens[i] = try allocator.dupe(u32, candidates[src_idx].tokens);
+            dup_count += 1;
             sorted_scores[i] = scores[src_idx];
             sorted_positions[i] = candidates[src_idx].position;
             sorted_anchors[i] = candidates[src_idx].anchor;
@@ -304,6 +331,7 @@ pub const Ranker = struct {
 
         var sorted_tokens = try allocator.alloc([]u32, candidates.len);
         defer allocator.free(sorted_tokens);
+        @memset(sorted_tokens, &[_]u32{});
 
         var sorted_scores = try allocator.alloc(f32, candidates.len);
         defer allocator.free(sorted_scores);
@@ -314,10 +342,19 @@ pub const Ranker = struct {
         var sorted_anchors = try allocator.alloc(bool, candidates.len);
         defer allocator.free(sorted_anchors);
 
+        var dup_count: usize = 0;
+        errdefer {
+            var d: usize = 0;
+            while (d < dup_count) : (d += 1) {
+                allocator.free(sorted_tokens[d]);
+            }
+        }
+
         i = 0;
         while (i < candidates.len) : (i += 1) {
             const src_idx = indices[i];
             sorted_tokens[i] = try allocator.dupe(u32, candidates[src_idx].tokens);
+            dup_count += 1;
             sorted_scores[i] = scores[src_idx];
             sorted_positions[i] = candidates[src_idx].position;
             sorted_anchors[i] = candidates[src_idx].anchor;
@@ -350,6 +387,8 @@ pub const Ranker = struct {
     pub fn topKHeap(self: *const Ranker, ssi: *const SSI, query: []const u32, k: usize, allocator: Allocator) ![]types.RankedSegment {
         if (k == 0) return allocator.alloc(types.RankedSegment, 0);
 
+        const retrieval_count = @max(k, RankerConfig.DEFAULT_TOP_K_RETRIEVAL);
+
         var heap = std.PriorityQueue(types.RankedSegment, void, struct {
             pub fn lessThan(_: void, a: types.RankedSegment, b: types.RankedSegment) std.math.Order {
                 if (math.isNan(a.score) and math.isNan(b.score)) return .eq;
@@ -360,7 +399,7 @@ pub const Ranker = struct {
         }.lessThan).init(allocator, {});
         defer heap.deinit();
 
-        const candidates = try ssi.retrieveTopK(query, RankerConfig.DEFAULT_TOP_K_RETRIEVAL, allocator);
+        const candidates = try ssi.retrieveTopK(query, retrieval_count, allocator);
         defer {
             var i: usize = 0;
             while (i < candidates.len) : (i += 1) {
@@ -420,7 +459,7 @@ pub const Ranker = struct {
         while (i < @min(self.ngram_weights.len, gradients.len)) : (i += 1) {
             const grad = gradients[i];
             if (math.isNan(grad) or math.isInf(grad)) continue;
-            self.ngram_weights[i] += grad * RankerConfig.LEARNING_RATE;
+            self.ngram_weights[i] -= grad;
             self.ngram_weights[i] = math.clamp(self.ngram_weights[i], 0.0, 1.0);
         }
     }
@@ -442,7 +481,8 @@ pub const Ranker = struct {
             const seed_b = self.lsh_hash_params[h * 2 + 1];
 
             for (tokens) |token| {
-                const hash_val = stableHash(mem.asBytes(&token), seed_a) ^ seed_b;
+                const le_bytes = tokenToLEBytes(token);
+                const hash_val = stableHash(&le_bytes, seed_a) ^ seed_b;
                 if (hash_val < min_hash) {
                     min_hash = hash_val;
                 }
@@ -467,15 +507,22 @@ pub const Ranker = struct {
     }
 
     pub fn estimateJaccard(set1: BitSet, set2: BitSet) f32 {
+        const len1 = set1.bits.len;
+        const len2 = set2.bits.len;
+        const max_words = @max(len1, len2);
+
+        if (max_words == 0) return 1.0;
+
         var intersect: usize = 0;
         var union_count: usize = 0;
-        const words = @min(set1.bits.len, set2.bits.len);
         var i: usize = 0;
-        while (i < words) : (i += 1) {
-            intersect += @popCount(set1.bits[i] & set2.bits[i]);
-            union_count += @popCount(set1.bits[i] | set2.bits[i]);
+        while (i < max_words) : (i += 1) {
+            const w1: u64 = if (i < len1) set1.bits[i] else 0;
+            const w2: u64 = if (i < len2) set2.bits[i] else 0;
+            intersect += @popCount(w1 & w2);
+            union_count += @popCount(w1 | w2);
         }
-        return if (union_count == 0) 0.0 else @as(f32, @floatFromInt(intersect)) / @as(f32, @floatFromInt(union_count));
+        return if (union_count == 0) 1.0 else @as(f32, @floatFromInt(intersect)) / @as(f32, @floatFromInt(union_count));
     }
 
     pub fn vectorScore(embedding: *const Tensor, query_emb: *const Tensor) !f32 {
@@ -657,6 +704,7 @@ pub const Ranker = struct {
 
         var sorted_tokens = try allocator.alloc([]u32, num_cand);
         defer allocator.free(sorted_tokens);
+        @memset(sorted_tokens, &[_]u32{});
 
         var sorted_scores = try allocator.alloc(f32, num_cand);
         defer allocator.free(sorted_scores);
@@ -667,10 +715,19 @@ pub const Ranker = struct {
         var sorted_anchors = try allocator.alloc(bool, num_cand);
         defer allocator.free(sorted_anchors);
 
+        var dup_count: usize = 0;
+        errdefer {
+            var d: usize = 0;
+            while (d < dup_count) : (d += 1) {
+                allocator.free(sorted_tokens[d]);
+            }
+        }
+
         i = 0;
         while (i < num_cand) : (i += 1) {
             const src_idx = indices[i];
             sorted_tokens[i] = try allocator.dupe(u32, candidates[src_idx].tokens);
+            dup_count += 1;
             sorted_scores[i] = combined[src_idx];
             sorted_positions[i] = candidates[src_idx].position;
             sorted_anchors[i] = candidates[src_idx].anchor;
@@ -692,32 +749,79 @@ pub const Ranker = struct {
         var rolling_buffer = std.ArrayList(u32).init(allocator);
         defer rolling_buffer.deinit();
 
-        var top_k = std.ArrayList(types.RankedSegment).init(allocator);
-        defer {
-            for (top_k.items) |*item| {
-                item.deinit(allocator);
+        var heap = std.PriorityQueue(types.RankedSegment, void, struct {
+            pub fn lessThan(_: void, a: types.RankedSegment, b: types.RankedSegment) std.math.Order {
+                if (math.isNan(a.score) and math.isNan(b.score)) return .eq;
+                if (math.isNan(a.score)) return .lt;
+                if (math.isNan(b.score)) return .gt;
+                return std.math.order(a.score, b.score);
             }
-            top_k.deinit();
+        }.lessThan).init(allocator, {});
+        defer {
+            while (heap.removeOrNull()) |item| {
+                var m = item;
+                m.deinit(allocator);
+            }
+            heap.deinit();
         }
 
-        var read_buffer: [RankerConfig.STREAMING_BUFFER_SIZE * @sizeOf(u32)]u8 = undefined;
+        var leftover_bytes: [3]u8 = undefined;
+        var leftover_len: usize = 0;
         var position: u64 = 0;
+        var read_buf: [RankerConfig.STREAMING_BUFFER_SIZE * @sizeOf(u32)]u8 = undefined;
 
         while (true) {
-            const bytes_read = reader.read(&read_buffer) catch |err| switch (err) {
+            const bytes_read = reader.read(&read_buf) catch |err| switch (err) {
                 error.EndOfStream => break,
                 else => return err,
             };
-
             if (bytes_read == 0) break;
 
-            const tokens_read = bytes_read / @sizeOf(u32);
-            if (tokens_read == 0) continue;
+            var combined_buf: []u8 = undefined;
+            var combined_len: usize = 0;
+            var combined_alloc: ?[]u8 = null;
+            defer {
+                if (combined_alloc) |ca| allocator.free(ca);
+            }
 
-            const token_bytes = read_buffer[0 .. tokens_read * @sizeOf(u32)];
-            const tokens_slice = mem.bytesAsSlice(u32, token_bytes);
+            if (leftover_len > 0) {
+                combined_len = leftover_len + bytes_read;
+                combined_alloc = try allocator.alloc(u8, combined_len);
+                combined_buf = combined_alloc.?;
+                var ci: usize = 0;
+                while (ci < leftover_len) : (ci += 1) {
+                    combined_buf[ci] = leftover_bytes[ci];
+                }
+                var ri: usize = 0;
+                while (ri < bytes_read) : (ri += 1) {
+                    combined_buf[leftover_len + ri] = read_buf[ri];
+                }
+                leftover_len = 0;
+            } else {
+                combined_buf = read_buf[0..bytes_read];
+                combined_len = bytes_read;
+            }
 
-            for (tokens_slice) |token| {
+            const full_tokens = combined_len / @sizeOf(u32);
+            const remainder = combined_len % @sizeOf(u32);
+
+            if (remainder > 0) {
+                var ri: usize = 0;
+                while (ri < remainder) : (ri += 1) {
+                    leftover_bytes[ri] = combined_buf[full_tokens * @sizeOf(u32) + ri];
+                }
+                leftover_len = remainder;
+            }
+
+            var ti: usize = 0;
+            while (ti < full_tokens) : (ti += 1) {
+                const offset = ti * @sizeOf(u32);
+                var token_bytes: [4]u8 = undefined;
+                token_bytes[0] = combined_buf[offset + 0];
+                token_bytes[1] = combined_buf[offset + 1];
+                token_bytes[2] = combined_buf[offset + 2];
+                token_bytes[3] = combined_buf[offset + 3];
+                const token = mem.readInt(u32, &token_bytes, .little);
                 try rolling_buffer.append(token);
             }
 
@@ -726,67 +830,168 @@ pub const Ranker = struct {
                 const score = try self.scoreSequence(window, ssi);
 
                 if (!math.isNan(score) and !math.isInf(score)) {
-                    if (top_k.items.len < k) {
-                        const seg = try types.RankedSegment.init(allocator, @constCast(window), score, position, false);
-                        try top_k.append(seg);
-                    } else {
-                        var min_idx: usize = 0;
-                        var min_score: f32 = top_k.items[0].score;
-                        var j: usize = 1;
-                        while (j < top_k.items.len) : (j += 1) {
-                            if (top_k.items[j].score < min_score) {
-                                min_score = top_k.items[j].score;
-                                min_idx = j;
-                            }
-                        }
-
-                        if (score > min_score) {
-                            top_k.items[min_idx].deinit(allocator);
-                            top_k.items[min_idx] = try types.RankedSegment.init(allocator, @constCast(window), score, position, false);
+                    if (heap.count() < k) {
+                        const seg = try types.RankedSegment.init(allocator, window, score, position, false);
+                        try heap.add(seg);
+                    } else if (heap.peek()) |top| {
+                        if (score > top.score) {
+                            var removed = heap.remove();
+                            removed.deinit(allocator);
+                            const seg = try types.RankedSegment.init(allocator, window, score, position, false);
+                            try heap.add(seg);
                         }
                     }
                 }
 
-                _ = rolling_buffer.orderedRemove(0);
-                position += 1;
+                const shift = @min(rolling_buffer.items.len, RankerConfig.STREAMING_WINDOW_SIZE / 4);
+                if (shift == 0) break;
+                const remaining = rolling_buffer.items.len - shift;
+                if (remaining > 0) {
+                    std.mem.copyForwards(u32, rolling_buffer.items[0..remaining], rolling_buffer.items[shift..rolling_buffer.items.len]);
+                }
+                rolling_buffer.shrinkRetainingCapacity(remaining);
+                position += shift;
             }
         }
 
-        const Context = struct {
-            pub fn lessThan(_: @This(), a: types.RankedSegment, b: types.RankedSegment) bool {
-                if (math.isNan(a.score)) return false;
-                if (math.isNan(b.score)) return true;
-                return a.score > b.score;
+        if (rolling_buffer.items.len > 0) {
+            const tail = rolling_buffer.items;
+            const score = try self.scoreSequence(tail, ssi);
+            if (!math.isNan(score) and !math.isInf(score)) {
+                if (heap.count() < k) {
+                    const seg = try types.RankedSegment.init(allocator, tail, score, position, false);
+                    try heap.add(seg);
+                } else if (heap.peek()) |top| {
+                    if (score > top.score) {
+                        var removed = heap.remove();
+                        removed.deinit(allocator);
+                        const seg = try types.RankedSegment.init(allocator, tail, score, position, false);
+                        try heap.add(seg);
+                    }
+                }
             }
-        };
-        std.mem.sort(types.RankedSegment, top_k.items, Context{}, Context.lessThan);
+        }
 
-        const result = try allocator.alloc(types.RankedSegment, top_k.items.len);
-        var i: usize = 0;
-        while (i < top_k.items.len) : (i += 1) {
-            result[i] = try types.RankedSegment.init(allocator, top_k.items[i].tokens, top_k.items[i].score, top_k.items[i].position, top_k.items[i].anchor);
+        const result_count = heap.count();
+        var result = try allocator.alloc(types.RankedSegment, result_count);
+        errdefer {
+            var ei: usize = 0;
+            while (ei < result.len) : (ei += 1) {
+                result[ei].deinit(allocator);
+            }
+            allocator.free(result);
+        }
+
+        var idx: usize = result_count;
+        while (heap.removeOrNull()) |item| {
+            if (idx > 0) {
+                idx -= 1;
+                result[idx] = item;
+            } else {
+                var m = item;
+                m.deinit(allocator);
+            }
         }
 
         return result;
     }
 
     pub fn parallelScore(self: *const Ranker, sequences: [][]u32, ssi: *const SSI, num_threads: usize) ![]f32 {
-        _ = num_threads;
         if (sequences.len == 0) return self.allocator.alloc(f32, 0);
 
         const scores = try self.allocator.alloc(f32, sequences.len);
         errdefer self.allocator.free(scores);
 
-        var i: usize = 0;
-        while (i < sequences.len) : (i += 1) {
-            scores[i] = try self.scoreSequence(sequences[i], ssi);
+        if (num_threads <= 1 or sequences.len <= 1) {
+            var i: usize = 0;
+            while (i < sequences.len) : (i += 1) {
+                scores[i] = try self.scoreSequence(sequences[i], ssi);
+            }
+            return scores;
         }
+
+        const effective_threads = @min(num_threads, sequences.len);
+        const chunk_size = sequences.len / effective_threads;
+        const remainder_count = sequences.len % effective_threads;
+
+        const ThreadContext = struct {
+            ranker: *const Ranker,
+            seqs: [][]u32,
+            ssi_ptr: *const SSI,
+            out: []f32,
+            start: usize,
+            end: usize,
+            err_flag: bool,
+        };
+
+        var contexts = try self.allocator.alloc(ThreadContext, effective_threads);
+        defer self.allocator.free(contexts);
+
+        var threads = try self.allocator.alloc(std.Thread, effective_threads);
+        defer self.allocator.free(threads);
+
+        var offset: usize = 0;
+        var t: usize = 0;
+        while (t < effective_threads) : (t += 1) {
+            const this_chunk = chunk_size + @as(usize, if (t < remainder_count) 1 else 0);
+            contexts[t] = .{
+                .ranker = self,
+                .seqs = sequences,
+                .ssi_ptr = ssi,
+                .out = scores,
+                .start = offset,
+                .end = offset + this_chunk,
+                .err_flag = false,
+            };
+            offset += this_chunk;
+        }
+
+        t = 0;
+        var spawned: usize = 0;
+        while (t < effective_threads) : (t += 1) {
+            threads[t] = std.Thread.spawn(.{}, struct {
+                fn work(ctx: *ThreadContext) void {
+                    var si: usize = ctx.start;
+                    while (si < ctx.end) : (si += 1) {
+                        ctx.out[si] = ctx.ranker.scoreSequence(ctx.seqs[si], ctx.ssi_ptr) catch {
+                            ctx.err_flag = true;
+                            return;
+                        };
+                    }
+                }
+            }.work, .{&contexts[t]}) catch {
+                var si: usize = contexts[t].start;
+                while (si < contexts[t].end) : (si += 1) {
+                    scores[si] = self.scoreSequence(sequences[si], ssi) catch 0.0;
+                }
+                spawned = t;
+                continue;
+            };
+            spawned = t + 1;
+        }
+
+        t = 0;
+        while (t < spawned) : (t += 1) {
+            threads[t].join();
+        }
+
+        var had_error = false;
+        t = 0;
+        while (t < effective_threads) : (t += 1) {
+            if (contexts[t].err_flag) had_error = true;
+        }
+
+        if (had_error) {
+            self.allocator.free(scores);
+            return error.ScoringFailed;
+        }
+
         return scores;
     }
 
     pub fn calibrateWeights(self: *Ranker, training_data: [][]u32, labels: []const f32, ssi: *const SSI, epochs: usize) !void {
-        if (training_data.len == 0 or labels.len == 0) return;
-        if (training_data.len != labels.len) return;
+        if (training_data.len == 0 or labels.len == 0) return error.InvalidParameter;
+        if (training_data.len != labels.len) return error.LengthMismatch;
 
         var gradients = try self.allocator.alloc(f32, self.ngram_weights.len);
         defer self.allocator.free(gradients);
@@ -803,12 +1008,32 @@ pub const Ranker = struct {
                 if (math.isNan(pred) or math.isNan(label)) continue;
                 if (math.isInf(pred) or math.isInf(label)) continue;
 
-                const err = pred - label;
-                var g: usize = 0;
-                while (g < self.ngram_weights.len) : (g += 1) {
-                    gradients[g] += err * RankerConfig.LEARNING_RATE;
+                const err_val = pred - label;
+
+                var gram: usize = 1;
+                while (gram <= @min(self.num_ngrams, training_data[i].len)) : (gram += 1) {
+                    var start: usize = 0;
+                    while (start <= training_data[i].len - gram) : (start += 1) {
+                        const ngram = training_data[i][start .. start + gram];
+                        const le_bytes = try tokensToLEBytes(self.allocator, ngram);
+                        defer self.allocator.free(le_bytes);
+                        const h = stableHash(le_bytes, self.seed);
+                        if (ssi.getSegment(h)) |s| {
+                            if (!math.isNan(s.score) and !math.isInf(s.score)) {
+                                const weight_idx = @min(gram - 1, self.ngram_weights.len - 1);
+                                gradients[weight_idx] += err_val * s.score;
+                            }
+                        }
+                    }
                 }
             }
+
+            const n_samples: f32 = @floatFromInt(training_data.len);
+            var g: usize = 0;
+            while (g < gradients.len) : (g += 1) {
+                gradients[g] = gradients[g] / n_samples * RankerConfig.LEARNING_RATE;
+            }
+
             self.updateWeights(gradients);
         }
     }
@@ -818,12 +1043,14 @@ pub const Ranker = struct {
         defer file.close();
         var writer = file.writer();
         try writer.writeInt(u8, 2, .little);
-        try writer.writeInt(usize, self.ngram_weights.len, .little);
+        try writer.writeInt(u64, @intCast(self.ngram_weights.len), .little);
+        try writer.writeInt(u64, @intCast(self.num_ngrams), .little);
         var i: usize = 0;
         while (i < self.ngram_weights.len) : (i += 1) {
-            try writer.writeAll(mem.asBytes(&self.ngram_weights[i]));
+            const bits: u32 = @bitCast(self.ngram_weights[i]);
+            try writer.writeInt(u32, bits, .little);
         }
-        try writer.writeInt(usize, self.num_hash_functions, .little);
+        try writer.writeInt(u64, @intCast(self.num_hash_functions), .little);
         i = 0;
         while (i < self.lsh_hash_params.len) : (i += 1) {
             try writer.writeInt(u64, self.lsh_hash_params[i], .little);
@@ -838,25 +1065,30 @@ pub const Ranker = struct {
         const version = try reader.readInt(u8, .little);
         if (version != 2) return error.InvalidVersion;
 
-        const num_w = try reader.readInt(usize, .little);
-        if (self.ngram_weights.len != num_w) {
+        const num_w = try reader.readInt(u64, .little);
+        const num_ng = try reader.readInt(u64, .little);
+
+        const num_w_usize: usize = @intCast(num_w);
+        const num_ng_usize: usize = @intCast(num_ng);
+
+        if (self.ngram_weights.len != num_w_usize) {
             self.allocator.free(self.ngram_weights);
-            self.ngram_weights = try self.allocator.alloc(f32, num_w);
+            self.ngram_weights = try self.allocator.alloc(f32, num_w_usize);
         }
+        self.num_ngrams = num_ng_usize;
 
         var i: usize = 0;
         while (i < self.ngram_weights.len) : (i += 1) {
-            var bytes: [@sizeOf(f32)]u8 align(@alignOf(f32)) = undefined;
-            const bytes_read = try reader.read(&bytes);
-            if (bytes_read != @sizeOf(f32)) return error.UnexpectedEof;
-            self.ngram_weights[i] = @as(*const f32, @ptrCast(&bytes)).*;
+            const bits = try reader.readInt(u32, .little);
+            self.ngram_weights[i] = @bitCast(bits);
         }
 
-        const num_h = try reader.readInt(usize, .little);
-        self.num_hash_functions = num_h;
-        if (self.lsh_hash_params.len != num_h * 2) {
+        const num_h = try reader.readInt(u64, .little);
+        const num_h_usize: usize = @intCast(num_h);
+        self.num_hash_functions = num_h_usize;
+        if (self.lsh_hash_params.len != num_h_usize * 2) {
             self.allocator.free(self.lsh_hash_params);
-            self.lsh_hash_params = try self.allocator.alloc(u64, num_h * 2);
+            self.lsh_hash_params = try self.allocator.alloc(u64, num_h_usize * 2);
         }
 
         i = 0;
@@ -881,7 +1113,7 @@ test "Ranker score" {
 
 test "MinHash signature deterministic" {
     const testing = std.testing;
-    var gpa = std.testing.allocator;
+    const gpa = std.testing.allocator;
     var ranker = try Ranker.init(gpa, 1, 32, 42);
     defer ranker.deinit();
     const sig1 = try ranker.minHashSignature(&.{ 1, 2, 3 });
@@ -893,7 +1125,7 @@ test "MinHash signature deterministic" {
 
 test "Jaccard similarity from signatures" {
     const testing = std.testing;
-    var gpa = std.testing.allocator;
+    const gpa = std.testing.allocator;
     var ranker = try Ranker.init(gpa, 1, 32, 42);
     defer ranker.deinit();
     const sig1 = try ranker.minHashSignature(&.{ 1, 2, 3 });
@@ -909,8 +1141,8 @@ test "Token diversity" {
     const gpa = std.testing.allocator;
     var ranker = try Ranker.init(gpa, 1, 1, 42);
     defer ranker.deinit();
-    const div1 = ranker.computeTokenDiversity(&.{ 1, 1, 1, 1 });
-    const div2 = ranker.computeTokenDiversity(&.{ 1, 2, 3, 4 });
+    const div1 = try ranker.computeTokenDiversity(&.{ 1, 1, 1, 1 });
+    const div2 = try ranker.computeTokenDiversity(&.{ 1, 2, 3, 4 });
     try testing.expect(div2 > div1);
 }
 
@@ -935,6 +1167,17 @@ test "Estimate Jaccard" {
     set2.set(0);
     const est = Ranker.estimateJaccard(set1, set2);
     try testing.expect(est >= 0.0 and est <= 1.0);
+}
+
+test "Estimate Jaccard empty sets" {
+    const testing = std.testing;
+    const gpa = std.testing.allocator;
+    var set1 = try BitSet.init(gpa, 64);
+    defer set1.deinit();
+    var set2 = try BitSet.init(gpa, 64);
+    defer set2.deinit();
+    const est = Ranker.estimateJaccard(set1, set2);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), est, 0.01);
 }
 
 test "Vector cosine score" {
