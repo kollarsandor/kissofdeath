@@ -925,7 +925,7 @@ pub const EntangledStochasticSymmetryOptimizer = struct {
                 self.statistics.moves_accepted += 1;
 
                 if (self.current_state.?.energy < self.best_state.?.energy) {
-                    var new_best = try self.current_state.?.clone(self.allocator);
+                    const new_best = try self.current_state.?.clone(self.allocator);
                     if (self.best_state) |*old_best| old_best.deinit();
                     self.best_state = new_best;
                     self.statistics.best_energy = self.current_state.?.energy;
@@ -1073,12 +1073,12 @@ pub const EntangledStochasticSymmetryOptimizer = struct {
 
                     const angle_a = self.prng.random().float(f64) * 2.0 * std.math.pi;
                     var new_re_a = node.qubit.a.re + perturbation * @cos(angle_a);
-                    var new_im_a = node.qubit.a.im + perturbation * @sin(angle_a);
+                    const new_im_a = node.qubit.a.im + perturbation * @sin(angle_a);
                     if (new_re_a == 0.0 and new_im_a == 0.0) new_re_a = 1e-6;
 
                     const angle_b = self.prng.random().float(f64) * 2.0 * std.math.pi;
                     var new_re_b = node.qubit.b.re + perturbation * @cos(angle_b);
-                    var new_im_b = node.qubit.b.im + perturbation * @sin(angle_b);
+                    const new_im_b = node.qubit.b.im + perturbation * @sin(angle_b);
                     if (new_re_b == 0.0 and new_im_b == 0.0) new_re_b = 1e-6;
 
                     const mag = std.math.sqrt(new_re_a * new_re_a + new_im_a * new_im_a + new_re_b * new_re_b + new_im_b * new_im_b);

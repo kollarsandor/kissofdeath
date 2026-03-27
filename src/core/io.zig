@@ -754,7 +754,7 @@ pub inline fn toLittleEndian(comptime T: type, value: T) T {
         if (info != .Int) @compileError("toLittleEndian requires integer type");
     }
     return switch (comptime builtin.target.cpu.arch.endian()) {
-        .Little => value,
+        .little => value,
         .Big => @byteSwap(value),
     };
 }
@@ -773,7 +773,7 @@ pub inline fn toBigEndian(comptime T: type, value: T) T {
         if (info != .Int) @compileError("toBigEndian requires integer type");
     }
     return switch (comptime builtin.target.cpu.arch.endian()) {
-        .Little => @byteSwap(value),
+        .little => @byteSwap(value),
         .Big => value,
     };
 }

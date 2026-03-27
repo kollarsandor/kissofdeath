@@ -456,7 +456,7 @@ pub const SSI = struct {
     }
 
     fn writeBoolFlag(writer: anytype, value: bool) !void {
-        try writer.writeInt(u8, if (value) 1 else 0, .Little);
+        try writer.writeInt(u8, if (value) 1 else 0, .little);
     }
 
     fn readBoolFlag(reader: anytype) !bool {
@@ -465,7 +465,7 @@ pub const SSI = struct {
 
     fn writeSegment(writer: anytype, seg: Segment) !void {
         try writer.writeInt(u64, seg.position, .little);
-        try writer.writeInt(u32, floatToBits(seg.score), .Little);
+        try writer.writeInt(u32, floatToBits(seg.score), .little);
         try writer.writeInt(u64, seg.anchor_hash, .little);
         try writer.writeInt(usize, seg.tokens.len, .little);
         for (seg.tokens) |tok| {

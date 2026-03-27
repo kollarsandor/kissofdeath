@@ -663,23 +663,23 @@ pub const MGT = struct {
         var writer = file.writer();
 
         const size = self.vocabSize();
-        try writer.writeInt(u32, @as(u32, @intCast(size)), .Little);
+        try writer.writeInt(u32, @as(u32, @intCast(size)), .little);
 
         var it = self.token_to_id.iterator();
         while (it.next()) |entry| {
             const word = entry.key_ptr.*;
             const id = entry.value_ptr.*;
-            try writer.writeInt(u32, @as(u32, @intCast(word.len)), .Little);
+            try writer.writeInt(u32, @as(u32, @intCast(word.len)), .little);
             try writer.writeAll(word);
             try writer.writeInt(u32, id, .little);
         }
 
-        try writer.writeInt(u32, @as(u32, @intCast(self.bpe_pairs.count())), .Little);
+        try writer.writeInt(u32, @as(u32, @intCast(self.bpe_pairs.count())), .little);
         var bpe_it = self.bpe_pairs.iterator();
         while (bpe_it.next()) |entry| {
             const key = entry.key_ptr.*;
             const merge = entry.value_ptr.*;
-            try writer.writeInt(u32, @as(u32, @intCast(key.len)), .Little);
+            try writer.writeInt(u32, @as(u32, @intCast(key.len)), .little);
             try writer.writeAll(key);
             try writer.writeInt(u32, merge.token_id, .little);
             try writer.writeInt(u32, merge.priority, .little);
@@ -687,10 +687,10 @@ pub const MGT = struct {
 
         const writeStringMap = struct {
             fn write(map: std.StringHashMap(u32), w: anytype) !void {
-                try w.writeInt(u32, @as(u32, @intCast(map.count())), .Little);
+                try w.writeInt(u32, @as(u32, @intCast(map.count())), .little);
                 var iter = map.iterator();
                 while (iter.next()) |e| {
-                    try w.writeInt(u32, @as(u32, @intCast(e.key_ptr.*.len)), .Little);
+                    try w.writeInt(u32, @as(u32, @intCast(e.key_ptr.*.len)), .little);
                     try w.writeAll(e.key_ptr.*);
                     try w.writeInt(u32, e.value_ptr.*, .little);
                 }
@@ -701,11 +701,11 @@ pub const MGT = struct {
         try writeStringMap.write(self.suffixes, writer);
         try writeStringMap.write(self.roots, writer);
 
-        try writer.writeInt(u32, @as(u32, @intCast(self.anchors.count())), .Little);
+        try writer.writeInt(u32, @as(u32, @intCast(self.anchors.count())), .little);
         var anch_it = self.anchors.iterator();
         while (anch_it.next()) |entry| {
             const key = entry.key_ptr.*;
-            try writer.writeInt(u32, @as(u32, @intCast(key.len)), .Little);
+            try writer.writeInt(u32, @as(u32, @intCast(key.len)), .little);
             try writer.writeAll(key);
             try writer.writeInt(u64, entry.value_ptr.*, .little);
         }

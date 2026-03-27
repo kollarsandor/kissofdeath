@@ -205,7 +205,7 @@ pub const Ranker = struct {
             const le_bytes = tokenToLEBytes(tokens[i]);
             const h = stableHash(&le_bytes, self.seed);
             if (ssi.getSegment(h)) |s| {
-                if (s.anchor) {
+                if (s.anchor_hash != 0) {
                     anchors += 1;
                     const i_u64: u64 = @intCast(i);
                     const raw_dist: u64 = if (i_u64 > s.position) i_u64 - s.position else s.position - i_u64;

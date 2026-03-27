@@ -8,43 +8,86 @@ const Mutex = std.Thread.Mutex;
 const CondVar = std.Thread.Condition;
 const Semaphore = std.Thread.Semaphore;
 
+const ArithmeticError = error{ Overflow, InvalidAlignment };
+const EmptyError = error{ Empty };
+const min_page_align: u29 = switch (builtin.os.tag) {
+    .macos => if (builtin.cpu.arch == .aarch64) 16384 else 4096,
+    else => 4096,
+};
+
 pub const MemoryConfig = struct {
-    pub const PAGE_SIZE: usize = std.mem.page_size;
+    pub const PAGE_SIZE: usize = min_page_align;
     pub const CACHE_LINE_SIZE: usize = 128;
 };
 
 pub const PageSize: usize = MemoryConfig.PAGE_SIZE;
 
-var g_empty_u8: [0]u8 = .{};
+fn emptySlice(comptime T: type) []T {
+    const addr: usize = @max(@alignOf(T), 1);
+    const p: [*]T = @ptrFromInt(addr);
+    return p[0..0];
+}
+
+fn emptyAlignedU8Slice() []align(PageSize) u8 {
+    const p: [*]align(PageSize) u8 = @ptrFromInt(PageSize);
+    return p[0..0];
+}
 
 fn emptyU8Slice() []u8 {
-    return g_empty_u8[0..];
+    return emptySlice(u8);
 }
 
 fn isPow2(x: usize) bool {
     return x != 0 and (x & (x - 1)) == 0;
 }
 
-fn alignForwardChecked(addr: usize, alignment: usize) !usize {
-    if (alignment == 0) return error.InvalidAlignment;
+fn alignForwardChecked(addr: usize, alignment: usize) ArithmeticError!usize {
     if (!isPow2(alignment)) return error.InvalidAlignment;
     return mem.alignForward(usize, addr, alignment);
 }
 
-fn addChecked(a: usize, b: usize) !usize {
+fn addChecked(a: usize, b: usize) ArithmeticError!usize {
     const r = @addWithOverflow(a, b);
     if (r[1] != 0) return error.Overflow;
     return r[0];
 }
 
-fn mulChecked(a: usize, b: usize) !usize {
+fn mulChecked(a: usize, b: usize) ArithmeticError!usize {
     const r = @mulWithOverflow(a, b);
     if (r[1] != 0) return error.Overflow;
     return r[0];
 }
 
+fn saturatingSub(a: usize, b: usize) usize {
+    return if (a >= b) a - b else 0;
+}
+
+fn runtimeAlignedAlloc(allocator: Allocator, comptime T: type, n: usize, alignment: usize) ![]T {
+    if (!isPow2(alignment)) return error.InvalidAlignment;
+    return switch (alignment) {
+        1 => allocator.alignedAlloc(T, 1, n),
+        2 => allocator.alignedAlloc(T, 2, n),
+        4 => allocator.alignedAlloc(T, 4, n),
+        8 => allocator.alignedAlloc(T, 8, n),
+        16 => allocator.alignedAlloc(T, 16, n),
+        32 => allocator.alignedAlloc(T, 32, n),
+        64 => allocator.alignedAlloc(T, 64, n),
+        128 => allocator.alignedAlloc(T, 128, n),
+        256 => allocator.alignedAlloc(T, 256, n),
+        512 => allocator.alignedAlloc(T, 512, n),
+        1024 => allocator.alignedAlloc(T, 1024, n),
+        2048 => allocator.alignedAlloc(T, 2048, n),
+        4096 => allocator.alignedAlloc(T, 4096, n),
+        8192 => allocator.alignedAlloc(T, 8192, n),
+        16384 => allocator.alignedAlloc(T, 16384, n),
+        32768 => allocator.alignedAlloc(T, 32768, n),
+        65536 => allocator.alignedAlloc(T, 65536, n),
+        else => error.InvalidAlignment,
+    };
+}
+
 pub const Arena = struct {
-    buffer: []u8,
+    buffer: []align(PageSize) u8,
     offset: usize,
     allocator: Allocator,
     mutex: Mutex,
@@ -53,7 +96,6 @@ pub const Arena = struct {
         if (size == 0) return error.InvalidSize;
         const aligned_size = mem.alignForward(usize, size, PageSize);
         const buffer = try allocator.alignedAlloc(u8, PageSize, aligned_size);
-        @memset(buffer, 0);
         return .{
             .buffer = buffer,
             .offset = 0,
@@ -64,21 +106,21 @@ pub const Arena = struct {
 
     pub fn deinit(self: *Arena) void {
         self.secureReset();
-        self.allocator.free(self.buffer);
-        self.buffer = emptyU8Slice();
+        const buf = self.buffer;
+        self.buffer = emptyAlignedU8Slice();
         self.offset = 0;
+        if (buf.len != 0) self.allocator.free(buf);
     }
 
     pub fn alloc(self: *Arena, size: usize, alignment: usize) ?[]u8 {
         if (size == 0) return emptyU8Slice();
-        if (alignment == 0 or !isPow2(alignment)) return null;
+        if (!isPow2(alignment)) return null;
 
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const aligned_offset = mem.alignForward(usize, self.offset, alignment);
-        const end = aligned_offset + size;
-        if (end < aligned_offset) return null;
+        const end = addChecked(aligned_offset, size) catch return null;
         if (end > self.buffer.len) return null;
 
         const out = self.buffer[aligned_offset..end];
@@ -93,13 +135,14 @@ pub const Arena = struct {
     pub fn reset(self: *Arena) void {
         self.mutex.lock();
         defer self.mutex.unlock();
+        if (self.offset > 0) secureZeroMemory(self.buffer.ptr, self.offset);
         self.offset = 0;
     }
 
     pub fn secureReset(self: *Arena) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        secureZeroMemory(self.buffer.ptr, self.buffer.len);
+        if (self.offset > 0) secureZeroMemory(self.buffer.ptr, self.offset);
         self.offset = 0;
     }
 
@@ -112,7 +155,9 @@ pub const Arena = struct {
     pub fn remaining(self: *Arena) usize {
         self.mutex.lock();
         defer self.mutex.unlock();
-        if (self.offset > self.buffer.len) return 0;
+        if (self.offset > self.buffer.len) {
+            std.debug.panic("Arena offset corrupted", .{});
+        }
         return self.buffer.len - self.offset;
     }
 };
@@ -160,45 +205,48 @@ pub const ArenaAllocator = struct {
         };
     }
 
+    fn ensureBuffer(self: *ArenaAllocator, len: usize, alignment: usize) ?void {
+        const need = addChecked(len, alignment - 1) catch return null;
+        const new_size = if (self.buffer_size > need) self.buffer_size else need;
+        const new_buf = self.parent_allocator.alloc(u8, new_size) catch return null;
+        self.buffers.append(new_buf) catch {
+            self.parent_allocator.free(new_buf);
+            return null;
+        };
+        self.current_buffer = new_buf;
+        self.pos = 0;
+    }
+
+    fn alignedPos(self: *ArenaAllocator, alignment: usize) ?usize {
+        const base = @intFromPtr(self.current_buffer.ptr);
+        const cur = addChecked(base, self.pos) catch return null;
+        const aligned = mem.alignForward(usize, cur, alignment);
+        return aligned - base;
+    }
+
     fn arenaAlloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
         _ = ret_addr;
         const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
-
         if (len == 0) return emptyU8Slice().ptr;
 
         const shift: usize = ptr_align;
         if (shift >= @bitSizeOf(usize)) return null;
-        const alignment: usize = (@as(usize, 1) << @intCast(shift));
-        if (alignment == 0 or !isPow2(alignment)) return null;
+        const alignment: usize = @as(usize, 1) << @intCast(shift);
 
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const current_pos = self.pos;
-        const aligned_pos = mem.alignForward(usize, current_pos, alignment);
+        if (self.current_buffer.len == 0) {
+            self.ensureBuffer(len, alignment) orelse return null;
+        }
 
-        const end = aligned_pos + len;
-        if (end < aligned_pos) return null;
-
-        if (self.current_buffer.len == 0 or end > self.current_buffer.len) {
-            const need = len + alignment;
-            const new_size = if (self.buffer_size > need) self.buffer_size else need;
-            const new_buf = self.parent_allocator.alloc(u8, new_size) catch return null;
-            self.buffers.append(new_buf) catch {
-                secureZeroMemory(new_buf.ptr, new_buf.len);
-                self.parent_allocator.free(new_buf);
-                return null;
-            };
-            self.current_buffer = new_buf;
-            self.pos = 0;
-
-            const new_aligned_pos = mem.alignForward(usize, 0, alignment);
-            const new_end = new_aligned_pos + len;
-            if (new_end < new_aligned_pos or new_end > self.current_buffer.len) return null;
-
-            const p = self.current_buffer.ptr + new_aligned_pos;
-            self.pos = new_end;
-            return p;
+        var aligned_pos = self.alignedPos(alignment) orelse return null;
+        var end = addChecked(aligned_pos, len) catch return null;
+        if (end > self.current_buffer.len) {
+            self.ensureBuffer(len, alignment) orelse return null;
+            aligned_pos = self.alignedPos(alignment) orelse return null;
+            end = addChecked(aligned_pos, len) catch return null;
+            if (end > self.current_buffer.len) return null;
         }
 
         const p = self.current_buffer.ptr + aligned_pos;
@@ -207,42 +255,41 @@ pub const ArenaAllocator = struct {
     }
 
     fn arenaResize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
-        _ = buf_align;
         _ = ret_addr;
         const self: *ArenaAllocator = @ptrCast(@alignCast(ctx));
+        const alignment: usize = if (buf_align >= @bitSizeOf(usize)) return false else (@as(usize, 1) << @intCast(buf_align));
 
         self.mutex.lock();
         defer self.mutex.unlock();
 
         if (self.current_buffer.len == 0) return false;
-
-        const buf_end = @intFromPtr(buf.ptr) + buf.len;
-        const cur_end = @intFromPtr(self.current_buffer.ptr) + self.pos;
+        const base = @intFromPtr(self.current_buffer.ptr);
+        const buf_addr = @intFromPtr(buf.ptr);
+        const expected_addr = mem.alignForward(usize, buf_addr, alignment);
+        if (expected_addr != buf_addr) return false;
+        const buf_end = addChecked(buf_addr, buf.len) catch return false;
+        const cur_end = addChecked(base, self.pos) catch return false;
         if (buf_end != cur_end) return false;
 
-        if (new_len == buf.len) return true;
-
-        if (new_len > buf.len) {
-            const additional = new_len - buf.len;
-            const new_pos = self.pos + additional;
-            if (new_pos < self.pos) return false;
+        if (new_len >= buf.len) {
+            const addl = new_len - buf.len;
+            const new_pos = addChecked(self.pos, addl) catch return false;
             if (new_pos > self.current_buffer.len) return false;
             self.pos = new_pos;
             return true;
-        } else {
-            const shrink = buf.len - new_len;
-            if (shrink > self.pos) return false;
-            self.pos -= shrink;
-            return true;
         }
+
+        const shrink = buf.len - new_len;
+        if (shrink > self.pos) return false;
+        self.pos -= shrink;
+        return true;
     }
 
     fn arenaFree(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
         _ = ctx;
+        _ = buf;
         _ = buf_align;
         _ = ret_addr;
-        if (buf.len == 0) return;
-        secureZeroMemory(buf.ptr, buf.len);
     }
 };
 
@@ -252,7 +299,15 @@ pub const SlabAllocator = struct {
     backing_allocator: Allocator,
     slab_size: usize,
     block_size: usize,
+    allocations: std.AutoHashMap(usize, AllocationMeta),
     mutex: Mutex,
+
+    const AllocationMeta = struct {
+        slab_index: usize,
+        start_block: usize,
+        blocks: usize,
+        size: usize,
+    };
 
     const Slab = struct {
         data: []u8,
@@ -262,49 +317,56 @@ pub const SlabAllocator = struct {
         fn isBlockFree(self: *const Slab, block_idx: usize) bool {
             const word_idx = block_idx / 64;
             const bit_idx: u6 = @intCast(block_idx % 64);
-            if (word_idx >= self.bitmap.len) return false;
             return (self.bitmap[word_idx] & (@as(u64, 1) << bit_idx)) == 0;
         }
 
         fn setBlockUsed(self: *Slab, block_idx: usize) void {
             const word_idx = block_idx / 64;
             const bit_idx: u6 = @intCast(block_idx % 64);
-            if (word_idx >= self.bitmap.len) return;
             self.bitmap[word_idx] |= (@as(u64, 1) << bit_idx);
         }
 
         fn setBlockFree(self: *Slab, block_idx: usize) void {
             const word_idx = block_idx / 64;
             const bit_idx: u6 = @intCast(block_idx % 64);
-            if (word_idx >= self.bitmap.len) return;
             self.bitmap[word_idx] &= ~(@as(u64, 1) << bit_idx);
+        }
+
+        fn setRange(self: *Slab, start_block: usize, blocks: usize, used: bool) void {
+            var i: usize = start_block;
+            const end = start_block + blocks;
+            while (i < end) : (i += 1) {
+                if (used) self.setBlockUsed(i) else self.setBlockFree(i);
+            }
         }
     };
 
     pub fn init(parent_allocator: Allocator, slab_size: usize, num_slabs: usize, block_size: usize) !SlabAllocator {
         if (slab_size == 0) return error.InvalidSize;
         if (num_slabs == 0) return error.InvalidSlabCount;
-        if (block_size == 0) return error.InvalidBlockSize;
-        if (!isPow2(block_size)) return error.InvalidBlockSize;
-        if (slab_size < block_size) return error.InvalidSize;
+        if (block_size == 0 or !isPow2(block_size)) return error.InvalidBlockSize;
+        if (slab_size < block_size or slab_size % block_size != 0) return error.InvalidSize;
 
-        const slabs = try parent_allocator.alloc(Slab, num_slabs);
-        errdefer parent_allocator.free(slabs);
+        var slabs = try parent_allocator.alloc(Slab, num_slabs);
+        var initialized: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < initialized) : (i += 1) {
+                parent_allocator.free(slabs[i].bitmap);
+                parent_allocator.free(slabs[i].data);
+            }
+            parent_allocator.free(slabs);
+        }
 
         const num_blocks = slab_size / block_size;
-        if (num_blocks == 0) return error.InvalidSize;
-
         const bitmap_words = (num_blocks + 63) / 64;
-
-        var i: usize = 0;
-        while (i < slabs.len) : (i += 1) {
-            slabs[i].data = try parent_allocator.alloc(u8, slab_size);
-            errdefer parent_allocator.free(slabs[i].data);
-            slabs[i].bitmap = try parent_allocator.alloc(u64, bitmap_words);
-            errdefer parent_allocator.free(slabs[i].bitmap);
-            @memset(slabs[i].data, 0);
-            @memset(slabs[i].bitmap, 0);
-            slabs[i].num_blocks = num_blocks;
+        while (initialized < num_slabs) : (initialized += 1) {
+            slabs[initialized].data = try parent_allocator.alloc(u8, slab_size);
+            errdefer if (initialized < num_slabs) parent_allocator.free(slabs[initialized].data);
+            slabs[initialized].bitmap = try parent_allocator.alloc(u64, bitmap_words);
+            @memset(slabs[initialized].data, 0);
+            @memset(slabs[initialized].bitmap, 0);
+            slabs[initialized].num_blocks = num_blocks;
         }
 
         return .{
@@ -313,6 +375,7 @@ pub const SlabAllocator = struct {
             .backing_allocator = parent_allocator,
             .slab_size = slab_size,
             .block_size = block_size,
+            .allocations = std.AutoHashMap(usize, AllocationMeta).init(parent_allocator),
             .mutex = .{},
         };
     }
@@ -321,13 +384,15 @@ pub const SlabAllocator = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        for (self.slabs) |slab| {
+        self.allocations.deinit();
+        const slabs = self.slabs;
+        self.slabs = emptySlice(Slab);
+        for (slabs) |slab| {
             secureZeroMemory(slab.data.ptr, slab.data.len);
             self.backing_allocator.free(slab.bitmap);
             self.backing_allocator.free(slab.data);
         }
-        self.backing_allocator.free(self.slabs);
-        self.slabs = self.slabs[0..0];
+        if (slabs.len != 0) self.backing_allocator.free(slabs);
         self.next_id = 0;
     }
 
@@ -339,14 +404,10 @@ pub const SlabAllocator = struct {
         defer self.mutex.unlock();
 
         const blocks_needed = (size + self.block_size - 1) / self.block_size;
-
-        const start_id = self.next_id;
         var search_count: usize = 0;
-
         while (search_count < self.slabs.len) : (search_count += 1) {
-            const slab_idx = (start_id + search_count) % self.slabs.len;
+            const slab_idx = (self.next_id + search_count) % self.slabs.len;
             var slab = &self.slabs[slab_idx];
-
             var consecutive: usize = 0;
             var start_idx: usize = 0;
 
@@ -355,23 +416,29 @@ pub const SlabAllocator = struct {
                 if (slab.isBlockFree(i)) {
                     if (consecutive == 0) start_idx = i;
                     consecutive += 1;
-                    if (consecutive >= blocks_needed) {
-                        var j: usize = start_idx;
-                        const endj = start_idx + blocks_needed;
-                        while (j < endj) : (j += 1) {
-                            slab.setBlockUsed(j);
-                        }
+                    if (consecutive == blocks_needed) {
                         const offset = start_idx * self.block_size;
+                        const block_span = blocks_needed * self.block_size;
+                        const out = slab.data[offset .. offset + size];
+                        slab.setRange(start_idx, blocks_needed, true);
+                        self.allocations.put(@intFromPtr(out.ptr), .{
+                            .slab_index = slab_idx,
+                            .start_block = start_idx,
+                            .blocks = blocks_needed,
+                            .size = size,
+                        }) catch {
+                            slab.setRange(start_idx, blocks_needed, false);
+                            return null;
+                        };
+                        @memset(slab.data[offset .. offset + block_span], 0);
                         self.next_id = (slab_idx + 1) % self.slabs.len;
-                        return slab.data[offset .. offset + size];
+                        return out;
                     }
                 } else {
                     consecutive = 0;
                 }
             }
         }
-
-        self.next_id = 0;
         return null;
     }
 
@@ -387,10 +454,13 @@ pub const SlabAllocator = struct {
     }
 
     fn slabVtableAlloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
-        _ = ptr_align;
         _ = ret_addr;
         const self: *SlabAllocator = @ptrCast(@alignCast(ctx));
+        if (ptr_align >= @bitSizeOf(usize)) return null;
+        const alignment: usize = @as(usize, 1) << @intCast(ptr_align);
+        if (alignment > self.block_size) return null;
         const slice = self.alloc(len) orelse return null;
+        if (!mem.isAligned(@intFromPtr(slice.ptr), alignment)) return null;
         return slice.ptr;
     }
 
@@ -416,41 +486,27 @@ pub const SlabAllocator = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const ptr_addr = @intFromPtr(ptr.ptr);
-
-        for (self.slabs) |*slab| {
-            const slab_start = @intFromPtr(slab.data.ptr);
-            const slab_end = slab_start + slab.data.len;
-
-            if (ptr_addr >= slab_start and ptr_addr < slab_end) {
-                const offset = ptr_addr - slab_start;
-                if (offset % self.block_size != 0) return error.InvalidPointer;
-                if (offset + ptr.len > slab.data.len) return error.InvalidPointer;
-
-                const start_block = offset / self.block_size;
-                const blocks_used = (ptr.len + self.block_size - 1) / self.block_size;
-                if (start_block + blocks_used > slab.num_blocks) return error.InvalidPointer;
-
-                var i: usize = start_block;
-                const end_block = start_block + blocks_used;
-                while (i < end_block) : (i += 1) {
-                    if (slab.isBlockFree(i)) return error.DoubleFree;
-                    slab.setBlockFree(i);
-                }
-
-                secureZeroMemory(@ptrCast(ptr.ptr), blocks_used * self.block_size);
-                return;
-            }
-        }
-
-        return error.InvalidPointer;
+        const entry = self.allocations.fetchRemove(@intFromPtr(ptr.ptr)) orelse return error.InvalidPointer;
+        const meta = entry.value;
+        var slab = &self.slabs[meta.slab_index];
+        if (ptr.len != meta.size) return error.InvalidPointer;
+        slab.setRange(meta.start_block, meta.blocks, false);
+        const offset = meta.start_block * self.block_size;
+        secureZeroMemory((slab.data.ptr + offset), meta.size);
     }
 };
 
 pub const PoolAllocator = struct {
     pools: []Pool,
     backing_allocator: Allocator,
+    allocations: std.AutoHashMap(usize, AllocationMeta),
     mutex: Mutex,
+
+    const AllocationMeta = struct {
+        pool_index: usize,
+        block_index: usize,
+        size: usize,
+    };
 
     const Pool = struct {
         buffer: []u8,
@@ -459,6 +515,15 @@ pub const PoolAllocator = struct {
         free_list_head: ?usize,
         used: usize,
 
+        fn ptrForIndex(self: *Pool, idx: usize) [*]u8 {
+            return self.buffer.ptr + idx * self.block_size;
+        }
+
+        fn nextPtr(self: *Pool, idx: usize) *?usize {
+            const base = self.ptrForIndex(idx);
+            return @alignCast(@ptrCast(base));
+        }
+
         fn initFreeList(self: *Pool) void {
             if (self.num_blocks == 0) {
                 self.free_list_head = null;
@@ -466,32 +531,11 @@ pub const PoolAllocator = struct {
             }
             var i: usize = 0;
             while (i < self.num_blocks) : (i += 1) {
-                const base = self.buffer.ptr + i * self.block_size;
-                const p: *?usize = @ptrCast(@alignCast(base));
-                if (i + 1 < self.num_blocks) {
-                    p.* = i + 1;
-                } else {
-                    p.* = null;
-                }
+                const next = self.nextPtr(i);
+                next.* = if (i + 1 < self.num_blocks) i + 1 else null;
             }
             self.free_list_head = 0;
-        }
-
-        fn owns(self: *const Pool, ptr: [*]u8) bool {
-            const start = @intFromPtr(self.buffer.ptr);
-            const end = start + self.buffer.len;
-            const a = @intFromPtr(ptr);
-            return a >= start and a < end;
-        }
-
-        fn blockIndex(self: *const Pool, ptr: [*]u8) !usize {
-            const start = @intFromPtr(self.buffer.ptr);
-            const a = @intFromPtr(ptr);
-            const offset = a - start;
-            if (offset % self.block_size != 0) return error.InvalidPointer;
-            const idx = offset / self.block_size;
-            if (idx >= self.num_blocks) return error.InvalidPointer;
-            return idx;
+            self.used = 0;
         }
     };
 
@@ -501,24 +545,31 @@ pub const PoolAllocator = struct {
         if (num_pools == 0) return error.InvalidPoolCount;
 
         const actual_block_size = mem.alignForward(usize, @max(block_size, @sizeOf(?usize)), @alignOf(?usize));
-        const pools = try parent_allocator.alloc(Pool, num_pools);
-        errdefer parent_allocator.free(pools);
+        var pools = try parent_allocator.alloc(Pool, num_pools);
+        var initialized: usize = 0;
+        errdefer {
+            var i: usize = 0;
+            while (i < initialized) : (i += 1) {
+                parent_allocator.free(pools[i].buffer);
+            }
+            parent_allocator.free(pools);
+        }
 
-        for (pools) |*pool| {
+        while (initialized < num_pools) : (initialized += 1) {
             const total = try mulChecked(actual_block_size, num_blocks);
-            pool.buffer = try parent_allocator.alignedAlloc(u8, @alignOf(?usize), total);
-            errdefer parent_allocator.free(pool.buffer);
-            @memset(pool.buffer, 0);
-            pool.block_size = actual_block_size;
-            pool.num_blocks = num_blocks;
-            pool.free_list_head = null;
-            pool.used = 0;
-            pool.initFreeList();
+            pools[initialized].buffer = try parent_allocator.alignedAlloc(u8, @alignOf(?usize), total);
+            @memset(pools[initialized].buffer, 0);
+            pools[initialized].block_size = actual_block_size;
+            pools[initialized].num_blocks = num_blocks;
+            pools[initialized].free_list_head = null;
+            pools[initialized].used = 0;
+            pools[initialized].initFreeList();
         }
 
         return .{
             .pools = pools,
             .backing_allocator = parent_allocator,
+            .allocations = std.AutoHashMap(usize, AllocationMeta).init(parent_allocator),
             .mutex = .{},
         };
     }
@@ -527,12 +578,14 @@ pub const PoolAllocator = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        for (self.pools) |pool| {
+        self.allocations.deinit();
+        const pools = self.pools;
+        self.pools = emptySlice(Pool);
+        for (pools) |pool| {
             secureZeroMemory(pool.buffer.ptr, pool.buffer.len);
             self.backing_allocator.free(pool.buffer);
         }
-        self.backing_allocator.free(self.pools);
-        self.pools = self.pools[0..0];
+        if (pools.len != 0) self.backing_allocator.free(pools);
     }
 
     pub fn alloc(self: *PoolAllocator, size: usize) ?[]u8 {
@@ -541,17 +594,28 @@ pub const PoolAllocator = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        for (self.pools) |*pool| {
+        for (self.pools, 0..) |*pool, pool_index| {
             if (size > pool.block_size) continue;
             const head_idx = pool.free_list_head orelse continue;
 
-            const base = pool.buffer.ptr + head_idx * pool.block_size;
-            const next_ptr: *?usize = @ptrCast(@alignCast(base));
-            pool.free_list_head = next_ptr.*;
+            const next = pool.nextPtr(head_idx);
+            pool.free_list_head = next.*;
             pool.used += 1;
 
             const full = pool.buffer[head_idx * pool.block_size .. (head_idx + 1) * pool.block_size];
-            return full[0..size];
+            @memset(full, 0);
+            const out = full[0..size];
+            self.allocations.put(@intFromPtr(out.ptr), .{
+                .pool_index = pool_index,
+                .block_index = head_idx,
+                .size = size,
+            }) catch {
+                next.* = pool.free_list_head;
+                pool.free_list_head = head_idx;
+                pool.used -= 1;
+                return null;
+            };
+            return out;
         }
 
         return null;
@@ -569,10 +633,13 @@ pub const PoolAllocator = struct {
     }
 
     fn poolVtableAlloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
-        _ = ptr_align;
         _ = ret_addr;
         const self: *PoolAllocator = @ptrCast(@alignCast(ctx));
+        if (ptr_align >= @bitSizeOf(usize)) return null;
+        const alignment: usize = @as(usize, 1) << @intCast(ptr_align);
+        if (alignment > @alignOf(?usize)) return null;
         const slice = self.alloc(len) orelse return null;
+        if (!mem.isAligned(@intFromPtr(slice.ptr), alignment)) return null;
         return slice.ptr;
     }
 
@@ -598,58 +665,59 @@ pub const PoolAllocator = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        for (self.pools) |*pool| {
-            if (!pool.owns(@ptrCast(ptr.ptr))) continue;
+        const removed = self.allocations.fetchRemove(@intFromPtr(ptr.ptr)) orelse return error.InvalidPointer;
+        const meta = removed.value;
+        var pool = &self.pools[meta.pool_index];
+        if (ptr.len != meta.size or pool.used == 0) return error.DoubleFree;
 
-            const idx = try pool.blockIndex(@ptrCast(ptr.ptr));
-            const base = pool.buffer.ptr + idx * pool.block_size;
-            const p: *?usize = @ptrCast(@alignCast(base));
-            p.* = pool.free_list_head;
-            pool.free_list_head = idx;
-
-            if (pool.used == 0) return error.DoubleFree;
-            pool.used -= 1;
-
-            secureZeroMemory(base, pool.block_size);
-            return;
-        }
-
-        return error.InvalidPointer;
+        const full = pool.buffer[meta.block_index * pool.block_size .. (meta.block_index + 1) * pool.block_size];
+        secureZeroMemory(full.ptr, full.len);
+        const next = pool.nextPtr(meta.block_index);
+        next.* = pool.free_list_head;
+        pool.free_list_head = meta.block_index;
+        pool.used -= 1;
     }
 };
 
 pub const BuddyAllocator = struct {
     backing_allocator: Allocator,
-    memory: []u8,
-    tree: []u8,
+    memory: []align(PageSize) u8,
+    tree: []State,
     max_order: u32,
     min_order: u32,
-    size_map: std.AutoHashMap(usize, u32),
+    size_map: std.AutoHashMap(usize, AllocationMeta),
     mutex: Mutex,
 
-    const State = enum(u8) { free = 0, split = 1, full = 2 };
+    const AllocationMeta = struct {
+        order: u32,
+        size: usize,
+    };
+
+    const State = enum(u8) {
+        free,
+        split,
+        full,
+    };
 
     pub fn init(parent_allocator: Allocator, size: usize, min_order: u32) !BuddyAllocator {
         if (size == 0) return error.InvalidSize;
+        if (min_order >= @bitSizeOf(usize)) return error.InvalidSize;
         const min_block = @as(usize, 1) << @intCast(min_order);
-        if (min_block == 0) return error.InvalidSize;
         if (size < min_block) return error.SizeTooSmall;
 
         const capacity = std.math.ceilPowerOfTwo(usize, size) catch return error.InvalidSize;
         const max_order: u32 = @intCast(std.math.log2_int(usize, capacity));
         if (max_order < min_order) return error.SizeTooSmall;
+        const leaf_count = capacity / min_block;
+        if (leaf_count == 0) return error.InvalidSize;
+        const tree_nodes = try subTwoTimesMinusOne(leaf_count);
 
-        const tree_nodes = (@as(usize, 1) << @intCast(max_order + 1)) - 1;
-        const tree = try parent_allocator.alloc(u8, tree_nodes);
+        const tree = try parent_allocator.alloc(State, tree_nodes);
+        @memset(tree, .free);
         errdefer parent_allocator.free(tree);
-        @memset(tree, @intFromEnum(State.free));
 
         const memory = try parent_allocator.alignedAlloc(u8, PageSize, capacity);
         errdefer parent_allocator.free(memory);
-        @memset(memory, 0);
-
-        var size_map = std.AutoHashMap(usize, u32).init(parent_allocator);
-        errdefer size_map.deinit();
 
         return .{
             .backing_allocator = parent_allocator,
@@ -657,9 +725,15 @@ pub const BuddyAllocator = struct {
             .tree = tree,
             .max_order = max_order,
             .min_order = min_order,
-            .size_map = size_map,
+            .size_map = std.AutoHashMap(usize, AllocationMeta).init(parent_allocator),
             .mutex = .{},
         };
+    }
+
+    fn subTwoTimesMinusOne(x: usize) ArithmeticError!usize {
+        const twice = try mulChecked(x, 2);
+        if (twice == 0) return error.Overflow;
+        return twice - 1;
     }
 
     pub fn deinit(self: *BuddyAllocator) void {
@@ -667,27 +741,23 @@ pub const BuddyAllocator = struct {
         defer self.mutex.unlock();
 
         self.size_map.deinit();
-        secureZeroMemory(self.memory.ptr, self.memory.len);
-        self.backing_allocator.free(self.memory);
-        self.backing_allocator.free(self.tree);
-        self.memory = emptyU8Slice();
-        self.tree = self.tree[0..0];
-    }
-
-    fn nodeState(self: *const BuddyAllocator, idx: usize) State {
-        return @enumFromInt(self.tree[idx]);
-    }
-
-    fn setNodeState(self: *BuddyAllocator, idx: usize, st: State) void {
-        self.tree[idx] = @intFromEnum(st);
+        const memory = self.memory;
+        const tree = self.tree;
+        self.memory = emptyAlignedU8Slice();
+        self.tree = emptySlice(State);
+        if (memory.len != 0) {
+            secureZeroMemory(memory.ptr, memory.len);
+            self.backing_allocator.free(memory);
+        }
+        if (tree.len != 0) self.backing_allocator.free(tree);
     }
 
     fn leftChild(idx: usize) usize {
-        return 2 * idx + 1;
+        return idx * 2 + 1;
     }
 
     fn rightChild(idx: usize) usize {
-        return 2 * idx + 2;
+        return idx * 2 + 2;
     }
 
     fn parent(idx: usize) usize {
@@ -698,26 +768,42 @@ pub const BuddyAllocator = struct {
         return (@as(usize, 1) << @intCast(level)) - 1;
     }
 
+    fn updateUp(self: *BuddyAllocator, idx: usize) void {
+        const l = leftChild(idx);
+        const r = rightChild(idx);
+        if (r >= self.tree.len) return;
+        const ls = self.tree[l];
+        const rs = self.tree[r];
+        self.tree[idx] = if (ls == .full and rs == .full)
+            .full
+        else if (ls == .free and rs == .free)
+            .free
+        else
+            .split;
+    }
+
     fn allocRec(self: *BuddyAllocator, idx: usize, cur_order: u32, want_order: u32) ?usize {
-        const st = self.nodeState(idx);
+        if (idx >= self.tree.len) return null;
+        const st = self.tree[idx];
         if (st == .full) return null;
 
         if (cur_order == want_order) {
             if (st != .free) return null;
-            self.setNodeState(idx, .full);
+            self.tree[idx] = .full;
             return idx;
-        }
-
-        if (st == .free) {
-            self.setNodeState(idx, .split);
-            const l = leftChild(idx);
-            const r = rightChild(idx);
-            self.setNodeState(l, .free);
-            self.setNodeState(r, .free);
         }
 
         const l = leftChild(idx);
         const r = rightChild(idx);
+        if (r >= self.tree.len) return null;
+
+        if (st == .free) {
+            self.tree[idx] = .split;
+            self.tree[l] = .free;
+            self.tree[r] = .free;
+        } else if (st != .split) {
+            return null;
+        }
 
         if (self.allocRec(l, cur_order - 1, want_order)) |found| {
             self.updateUp(idx);
@@ -727,33 +813,54 @@ pub const BuddyAllocator = struct {
             self.updateUp(idx);
             return found;
         }
-
         self.updateUp(idx);
         return null;
     }
 
-    fn updateUp(self: *BuddyAllocator, idx: usize) void {
-        const l = leftChild(idx);
-        const r = rightChild(idx);
-        const ls = self.nodeState(l);
-        const rs = self.nodeState(r);
-
-        if (ls == .full and rs == .full) {
-            self.setNodeState(idx, .full);
-        } else if (ls == .free and rs == .free) {
-            self.setNodeState(idx, .free);
-        } else {
-            self.setNodeState(idx, .split);
-        }
-    }
-
-    fn ptrFromIndex(self: *BuddyAllocator, idx: usize, order: u32) []u8 {
+    fn ptrFromIndex(self: *BuddyAllocator, idx: usize, order: u32) []align(PageSize) u8 {
         const level = self.max_order - order;
         const start = levelStart(level);
         const offset_in_level = idx - start;
         const block_size = @as(usize, 1) << @intCast(order);
         const byte_offset = offset_in_level * block_size;
-        return self.memory[byte_offset .. byte_offset + block_size];
+        const p: [*]align(PageSize) u8 = @alignCast(self.memory.ptr + byte_offset);
+        return p[0..block_size];
+    }
+
+    fn freeIndex(self: *BuddyAllocator, idx: usize, order: u32) void {
+        _ = order;
+        if (idx >= self.tree.len) return;
+        self.tree[idx] = .free;
+        var cur = idx;
+        while (cur != 0) {
+            const p = parent(cur);
+            self.updateUp(p);
+            cur = p;
+        }
+    }
+
+    fn allocAlignedInternal(self: *BuddyAllocator, size: usize, alignment: usize) ![]u8 {
+        if (size == 0) return error.InvalidSize;
+        if (!isPow2(alignment)) return error.InvalidAlignment;
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var needed = if (size > alignment) size else alignment;
+        if (needed < (@as(usize, 1) << @intCast(self.min_order))) needed = @as(usize, 1) << @intCast(self.min_order);
+        var want_order: u32 = @intCast(std.math.log2_int_ceil(usize, needed));
+        if (want_order < self.min_order) want_order = self.min_order;
+        if (want_order > self.max_order) return error.OutOfMemory;
+
+        const found = self.allocRec(0, self.max_order, want_order) orelse return error.OutOfMemory;
+        const block = self.ptrFromIndex(found, want_order);
+        const out = block[0..size];
+        self.size_map.put(@intFromPtr(out.ptr), .{ .order = want_order, .size = size }) catch {
+            self.freeIndex(found, want_order);
+            return error.OutOfMemory;
+        };
+        @memset(block, 0);
+        return out;
     }
 
     pub fn allocator(self: *BuddyAllocator) Allocator {
@@ -768,10 +875,11 @@ pub const BuddyAllocator = struct {
     }
 
     fn buddyVtableAlloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
-        _ = ptr_align;
         _ = ret_addr;
         const self: *BuddyAllocator = @ptrCast(@alignCast(ctx));
-        const slice = self.alloc(len) catch return null;
+        if (ptr_align >= @bitSizeOf(usize)) return null;
+        const alignment: usize = @as(usize, 1) << @intCast(ptr_align);
+        const slice = self.allocAlignedInternal(len, alignment) catch return null;
         return slice.ptr;
     }
 
@@ -792,28 +900,7 @@ pub const BuddyAllocator = struct {
     }
 
     pub fn alloc(self: *BuddyAllocator, size: usize) ![]u8 {
-        if (size == 0) return error.InvalidSize;
-
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        var want_order: u32 = self.min_order;
-        while ((@as(usize, 1) << @intCast(want_order)) < size) {
-            want_order += 1;
-            if (want_order > self.max_order) return error.OutOfMemory;
-        }
-
-        const found = self.allocRec(0, self.max_order, want_order) orelse return error.OutOfMemory;
-        const block = self.ptrFromIndex(found, want_order);
-        const slice = block[0..size];
-        try self.size_map.put(@intFromPtr(slice.ptr), want_order);
-        return slice;
-    }
-
-    fn buddyIndex(idx: usize) ?usize {
-        if (idx == 0) return null;
-        if ((idx & 1) == 1) return idx + 1;
-        return idx - 1;
+        return self.allocAlignedInternal(size, 1);
     }
 
     pub fn free(self: *BuddyAllocator, ptr: []u8) !void {
@@ -822,73 +909,44 @@ pub const BuddyAllocator = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        const removed = self.size_map.fetchRemove(@intFromPtr(ptr.ptr)) orelse return error.InvalidPointer;
+        const meta = removed.value;
+        if (ptr.len != meta.size) return error.InvalidPointer;
+
         const ptr_addr = @intFromPtr(ptr.ptr);
         const base = @intFromPtr(self.memory.ptr);
         if (ptr_addr < base or ptr_addr >= base + self.memory.len) return error.InvalidPointer;
 
-        const order = self.size_map.get(ptr_addr) orelse return error.InvalidPointer;
-        const block_size = @as(usize, 1) << @intCast(order);
-
+        const block_size = @as(usize, 1) << @intCast(meta.order);
         const offset = ptr_addr - base;
         if (offset % block_size != 0) return error.InvalidPointer;
 
-        const level = self.max_order - order;
+        const level = self.max_order - meta.order;
         const start = levelStart(level);
         const offset_in_level = offset / block_size;
         const idx = start + offset_in_level;
-
-        if (idx >= self.tree.len) return error.InvalidPointer;
-        if (self.nodeState(idx) != .full) return error.DoubleFree;
-
-        const full_block = self.ptrFromIndex(idx, order);
-        secureZeroMemory(full_block.ptr, full_block.len);
-        self.setNodeState(idx, .free);
-
-        var cur = idx;
-        while (cur != 0) {
-            const p = parent(cur);
-            const l = leftChild(p);
-            const r = rightChild(p);
-            const ls = self.nodeState(l);
-            const rs = self.nodeState(r);
-
-            if (ls == .free and rs == .free) {
-                self.setNodeState(p, .free);
-            } else if (ls == .full and rs == .full) {
-                self.setNodeState(p, .full);
-            } else {
-                self.setNodeState(p, .split);
-            }
-
-            cur = p;
-        }
-
-        _ = self.size_map.remove(ptr_addr);
+        secureZeroMemory(ptr.ptr, ptr.len);
+        self.freeIndex(idx, meta.order);
     }
 };
 
 pub const MutexQueue = struct {
     head: usize,
     tail: usize,
+    mask: usize,
     buffer: []?*anyopaque,
     allocator: Allocator,
     capacity: usize,
     mutex: Mutex,
 
     pub fn init(allocator: Allocator, capacity: usize) !MutexQueue {
-        if (capacity < 2) return error.InvalidSize;
-
+        if (capacity < 2 or !isPow2(capacity)) return error.InvalidSize;
         const buf = try allocator.alloc(?*anyopaque, capacity);
-        errdefer allocator.free(buf);
-
-        var i: usize = 0;
-        while (i < capacity) : (i += 1) {
-            buf[i] = null;
-        }
-
+        @memset(buf, null);
         return .{
             .head = 0,
             .tail = 0,
+            .mask = capacity - 1,
             .buffer = buf,
             .allocator = allocator,
             .capacity = capacity,
@@ -899,18 +957,18 @@ pub const MutexQueue = struct {
     pub fn deinit(self: *MutexQueue) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        self.allocator.free(self.buffer);
-        self.buffer = self.buffer[0..0];
+        const buf = self.buffer;
+        self.buffer = emptySlice(?*anyopaque);
         self.capacity = 0;
+        self.mask = 0;
+        if (buf.len != 0) self.allocator.free(buf);
     }
 
     pub fn enqueue(self: *MutexQueue, item: *anyopaque) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
-
-        const next_tail = (self.tail + 1) % self.capacity;
+        const next_tail = (self.tail + 1) & self.mask;
         if (next_tail == self.head) return false;
-
         self.buffer[self.tail] = item;
         self.tail = next_tail;
         return true;
@@ -919,17 +977,70 @@ pub const MutexQueue = struct {
     pub fn dequeue(self: *MutexQueue) ?*anyopaque {
         self.mutex.lock();
         defer self.mutex.unlock();
-
         if (self.head == self.tail) return null;
-
         const item = self.buffer[self.head];
         self.buffer[self.head] = null;
-        self.head = (self.head + 1) % self.capacity;
+        self.head = (self.head + 1) & self.mask;
         return item;
     }
 };
 
-pub const LockFreeQueue = MutexQueue;
+pub const LockFreeQueue = struct {
+    head: usize,
+    tail: usize,
+    mask: usize,
+    buffer: []usize,
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator, capacity: usize) !LockFreeQueue {
+        if (capacity < 2 or !isPow2(capacity)) return error.InvalidSize;
+        const buffer = try allocator.alloc(usize, capacity);
+        @memset(buffer, 0);
+        return .{
+            .head = 0,
+            .tail = 0,
+            .mask = capacity - 1,
+            .buffer = buffer,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *LockFreeQueue) void {
+        const buf = self.buffer;
+        self.buffer = emptySlice(usize);
+        self.head = 0;
+        self.tail = 0;
+        self.mask = 0;
+        if (buf.len != 0) self.allocator.free(buf);
+    }
+
+    pub fn enqueue(self: *LockFreeQueue, item: *anyopaque) bool {
+        while (true) {
+            const tail = @atomicLoad(usize, &self.tail, .acquire);
+            const head = @atomicLoad(usize, &self.head, .acquire);
+            const next_tail = (tail + 1) & self.mask;
+            if (next_tail == head) return false;
+            self.buffer[tail] = @intFromPtr(item);
+            if (@cmpxchgWeak(usize, &self.tail, tail, next_tail, .acq_rel, .acquire) == null) {
+                return true;
+            }
+        }
+    }
+
+    pub fn dequeue(self: *LockFreeQueue) ?*anyopaque {
+        while (true) {
+            const head = @atomicLoad(usize, &self.head, .acquire);
+            const tail = @atomicLoad(usize, &self.tail, .acquire);
+            if (head == tail) return null;
+            const value = self.buffer[head];
+            const next_head = (head + 1) & self.mask;
+            if (@cmpxchgWeak(usize, &self.head, head, next_head, .acq_rel, .acquire) == null) {
+                self.buffer[head] = 0;
+                return @ptrFromInt(value);
+            }
+        }
+    }
+};
 
 pub const MutexStack = struct {
     mutex: Mutex,
@@ -952,23 +1063,21 @@ pub const MutexStack = struct {
     pub fn deinit(self: *MutexStack) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-
         var cur = self.top;
+        self.top = null;
         while (cur) |n| {
             const next = n.next;
+            n.next = null;
             self.allocator.destroy(n);
             cur = next;
         }
-        self.top = null;
     }
 
     pub fn push(self: *MutexStack, value: *anyopaque) !void {
         const node = try self.allocator.create(Node);
         node.* = .{ .value = value, .next = null };
-
         self.mutex.lock();
         defer self.mutex.unlock();
-
         node.next = self.top;
         self.top = node;
     }
@@ -976,19 +1085,63 @@ pub const MutexStack = struct {
     pub fn pop(self: *MutexStack) ?*anyopaque {
         self.mutex.lock();
         defer self.mutex.unlock();
-
         const node = self.top orelse return null;
         self.top = node.next;
-        const v = node.value;
+        node.next = null;
+        const value = node.value;
         self.allocator.destroy(node);
-        return v;
+        return value;
     }
 };
 
-pub const LockFreeStack = MutexStack;
+pub const LockFreeStack = struct {
+    top: usize,
+    allocator: Allocator,
+
+    const Node = struct {
+        value: *anyopaque,
+        next: usize,
+    };
+
+    pub fn init(allocator: Allocator) LockFreeStack {
+        return .{ .top = 0, .allocator = allocator };
+    }
+
+    pub fn deinit(self: *LockFreeStack) void {
+        var cur = @atomicLoad(usize, &self.top, .acquire);
+        @atomicStore(usize, &self.top, 0, .release);
+        while (cur != 0) {
+            const node: *Node = @ptrFromInt(cur);
+            cur = node.next;
+            self.allocator.destroy(node);
+        }
+    }
+
+    pub fn push(self: *LockFreeStack, value: *anyopaque) !void {
+        const node = try self.allocator.create(Node);
+        while (true) {
+            const old = @atomicLoad(usize, &self.top, .acquire);
+            node.* = .{ .value = value, .next = old };
+            if (@cmpxchgWeak(usize, &self.top, old, @intFromPtr(node), .acq_rel, .acquire) == null) return;
+        }
+    }
+
+    pub fn pop(self: *LockFreeStack) ?*anyopaque {
+        while (true) {
+            const old = @atomicLoad(usize, &self.top, .acquire);
+            if (old == 0) return null;
+            const node: *Node = @ptrFromInt(old);
+            if (@cmpxchgWeak(usize, &self.top, old, node.next, .acq_rel, .acquire) == null) {
+                const value = node.value;
+                self.allocator.destroy(node);
+                return value;
+            }
+        }
+    }
+};
 
 pub const PageAllocator = struct {
-    pages: []u8,
+    pages: []align(PageSize) u8,
     allocator: Allocator,
     page_size: usize,
     bitmap: []u64,
@@ -996,17 +1149,11 @@ pub const PageAllocator = struct {
 
     pub fn init(allocator: Allocator, num_pages: usize) !PageAllocator {
         if (num_pages == 0) return error.InvalidSize;
-
         const total = try mulChecked(num_pages, PageSize);
         const pages = try allocator.alignedAlloc(u8, PageSize, total);
-        errdefer allocator.free(pages);
-        @memset(pages, 0);
-
         const bitmap_words = (num_pages + 63) / 64;
         const bitmap = try allocator.alloc(u64, bitmap_words);
-        errdefer allocator.free(bitmap);
         @memset(bitmap, 0);
-
         return .{
             .pages = pages,
             .allocator = allocator,
@@ -1019,18 +1166,20 @@ pub const PageAllocator = struct {
     pub fn deinit(self: *PageAllocator) void {
         self.mutex.lock();
         defer self.mutex.unlock();
-
-        secureZeroMemory(self.pages.ptr, self.pages.len);
-        self.allocator.free(self.bitmap);
-        self.allocator.free(self.pages);
-        self.pages = emptyU8Slice();
-        self.bitmap = self.bitmap[0..0];
+        const pages = self.pages;
+        const bitmap = self.bitmap;
+        self.pages = emptyAlignedU8Slice();
+        self.bitmap = emptySlice(u64);
+        if (pages.len != 0) {
+            secureZeroMemory(pages.ptr, pages.len);
+            self.allocator.free(pages);
+        }
+        if (bitmap.len != 0) self.allocator.free(bitmap);
     }
 
     fn isPageFree(self: *const PageAllocator, page_idx: usize) bool {
         const word_idx = page_idx / 64;
         const bit_idx: u6 = @intCast(page_idx % 64);
-        if (word_idx >= self.bitmap.len) return false;
         return (self.bitmap[word_idx] & (@as(u64, 1) << bit_idx)) == 0;
     }
 
@@ -1048,36 +1197,30 @@ pub const PageAllocator = struct {
 
     pub fn allocPages(self: *PageAllocator, num_pages: usize) ?[]u8 {
         if (num_pages == 0) return emptyU8Slice();
-
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const total_pages = self.pages.len / self.page_size;
         if (num_pages > total_pages) return null;
-
         var consecutive: usize = 0;
         var start_page: usize = 0;
-
         var i: usize = 0;
         while (i < total_pages) : (i += 1) {
             if (self.isPageFree(i)) {
                 if (consecutive == 0) start_page = i;
                 consecutive += 1;
-                if (consecutive >= num_pages) {
-                    var j: usize = start_page;
-                    const endj = start_page + num_pages;
-                    while (j < endj) : (j += 1) {
-                        self.setPageUsed(j);
-                    }
+                if (consecutive == num_pages) {
                     const offset = start_page * self.page_size;
                     const size = num_pages * self.page_size;
+                    var j: usize = start_page;
+                    while (j < start_page + num_pages) : (j += 1) self.setPageUsed(j);
+                    @memset(self.pages[offset .. offset + size], 0);
                     return self.pages[offset .. offset + size];
                 }
             } else {
                 consecutive = 0;
             }
         }
-
         return null;
     }
 
@@ -1091,36 +1234,30 @@ pub const PageAllocator = struct {
         const pages_start = @intFromPtr(self.pages.ptr);
         const pages_end = pages_start + self.pages.len;
         const ptr_addr = @intFromPtr(ptr.ptr);
-
         if (ptr_addr < pages_start or ptr_addr >= pages_end) return error.InvalidPointer;
         const offset = ptr_addr - pages_start;
         if (offset % self.page_size != 0) return error.InvalidPointer;
 
         const start_page = offset / self.page_size;
         const num_pages = ptr.len / self.page_size;
-
-        const total_pages = self.pages.len / self.page_size;
-        if (start_page + num_pages > total_pages) return error.InvalidPointer;
-
+        if (start_page + num_pages > self.pages.len / self.page_size) return error.InvalidPointer;
         var i: usize = start_page;
-        const endi = start_page + num_pages;
-        while (i < endi) : (i += 1) {
+        while (i < start_page + num_pages) : (i += 1) {
             if (self.isPageFree(i)) return error.DoubleFree;
-            self.setPageFree(i);
         }
-
-        secureZeroMemory(@ptrCast(ptr.ptr), ptr.len);
+        secureZeroMemory(ptr.ptr, ptr.len);
+        i = start_page;
+        while (i < start_page + num_pages) : (i += 1) self.setPageFree(i);
     }
 
-    pub fn mapPage(self: *PageAllocator, page_idx: usize) ?[*]align(PageSize) u8 {
+    pub fn mapPage(self: *PageAllocator, page_idx: usize) ?[]align(PageSize) u8 {
         self.mutex.lock();
         defer self.mutex.unlock();
-
         const total_pages = self.pages.len / self.page_size;
         if (page_idx >= total_pages) return null;
-
         const offset = page_idx * self.page_size;
-        return @ptrCast(@alignCast(self.pages.ptr + offset));
+        const p: [*]align(PageSize) u8 = @alignCast(self.pages.ptr + offset);
+        return p[0..self.page_size];
     }
 };
 
@@ -1133,12 +1270,14 @@ pub const ZeroCopySlice = struct {
     }
 
     pub fn slice(self: *const ZeroCopySlice, start: usize, end: usize) ZeroCopySlice {
-        if (start > end) return .{ .ptr = self.ptr, .len = 0 };
-        if (end > self.len) return .{ .ptr = self.ptr, .len = 0 };
-        return .{ .ptr = self.ptr + start, .len = end - start };
+        const s = @min(start, self.len);
+        const e = @min(end, self.len);
+        if (s >= e) return .{ .ptr = self.ptr + s, .len = 0 };
+        return .{ .ptr = self.ptr + s, .len = e - s };
     }
 
     pub fn copyTo(self: *const ZeroCopySlice, allocator: Allocator) ![]u8 {
+        if (self.len == 0) return emptyU8Slice();
         const buf = try allocator.alloc(u8, self.len);
         @memcpy(buf, self.asBytes());
         return buf;
@@ -1170,26 +1309,35 @@ pub const ResizeBuffer = struct {
     pub fn append(self: *ResizeBuffer, data: []const u8) !void {
         const new_len = try addChecked(self.len, data.len);
         if (new_len > self.buffer.len) {
-            const new_cap = std.math.ceilPowerOfTwo(usize, @max(new_len, 16)) catch new_len;
+            const new_cap = std.math.ceilPowerOfTwo(usize, @max(new_len, 16)) catch return error.OutOfMemory;
             if (self.buffer.len == 0) {
                 self.buffer = try self.allocator.alloc(u8, new_cap);
                 @memset(self.buffer, 0);
             } else {
-                self.buffer = try self.allocator.realloc(self.buffer, new_cap);
+                const old_len = self.buffer.len;
+                const resized = self.allocator.realloc(self.buffer, new_cap) catch return error.OutOfMemory;
+                self.buffer = resized;
+                if (new_cap > old_len) @memset(self.buffer[old_len..new_cap], 0);
             }
         }
-        @memcpy(self.buffer[self.len..new_len], data);
+        mem.copyForwards(u8, self.buffer[self.len..new_len], data);
         self.len = new_len;
     }
 
     pub fn clear(self: *ResizeBuffer) void {
+        if (self.len != 0) secureZeroMemory(self.buffer.ptr, self.len);
         self.len = 0;
     }
 
     pub fn toOwnedSlice(self: *ResizeBuffer) ![]u8 {
-        const out = if (self.buffer.len == 0) emptyU8Slice() else try self.allocator.realloc(self.buffer, self.len);
-        self.buffer = emptyU8Slice();
-        self.len = 0;
+        if (self.len == 0) {
+            self.deinit();
+            return emptyU8Slice();
+        }
+        const out = try self.allocator.alloc(u8, self.len);
+        errdefer self.allocator.free(out);
+        mem.copyForwards(u8, out, self.buffer[0..self.len]);
+        self.deinit();
         return out;
     }
 };
@@ -1197,21 +1345,17 @@ pub const ResizeBuffer = struct {
 pub fn zeroCopyTransfer(src: []const u8, dest: []u8) void {
     const n = @min(src.len, dest.len);
     if (n == 0) return;
-    @memcpy(dest[0..n], src[0..n]);
+    mem.copyForwards(u8, dest[0..n], src[0..n]);
 }
 
 pub fn alignedAlloc(allocator: Allocator, comptime T: type, n: usize, alignment: usize) ![]T {
-    if (alignment == 0 or !isPow2(alignment)) return error.InvalidAlignment;
-    if (n == 0) return @as([]T, @ptrCast(emptyU8Slice()));
-    const byte_count = try mulChecked(@sizeOf(T), n);
-    const raw = try allocator.alloc(u8, byte_count);
-    return @as([*]T, @ptrCast(@alignCast(raw.ptr)))[0..n];
+    if (n == 0) return emptySlice(T);
+    return runtimeAlignedAlloc(allocator, T, n, alignment);
 }
 
 pub fn cacheAlignedAlloc(allocator: Allocator, size: usize, cache_line_size: usize) ![]u8 {
-    _ = cache_line_size;
     if (size == 0) return emptyU8Slice();
-    return try allocator.alloc(u8, size);
+    return alignedAlloc(allocator, u8, size, cache_line_size);
 }
 
 pub fn sliceMemory(base: [*]u8, offset: usize, size: usize, buffer_size: usize) ![]u8 {
@@ -1219,7 +1363,7 @@ pub fn sliceMemory(base: [*]u8, offset: usize, size: usize, buffer_size: usize) 
     const end = @addWithOverflow(offset, size);
     if (end[1] != 0) return error.SliceOverflow;
     if (end[0] > buffer_size) return error.SliceOutOfBounds;
-    return base[offset .. offset + size];
+    return base[offset..end[0]];
 }
 
 pub fn zeroInitMemory(ptr: [*]u8, size: usize) void {
@@ -1229,21 +1373,20 @@ pub fn zeroInitMemory(ptr: [*]u8, size: usize) void {
 
 pub fn secureZeroMemory(ptr: [*]u8, size: usize) void {
     if (size == 0) return;
-    const p: [*]volatile u8 = ptr;
+    const p: [*]volatile u8 = @volatileCast(ptr);
     var i: usize = 0;
-    while (i < size) : (i += 1) {
-        p[i] = 0;
-    }
+    while (i < size) : (i += 1) p[i] = 0;
     std.atomic.fence(.seq_cst);
 }
 
 pub fn constantTimeCompare(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
+    const pa: [*]const volatile u8 = @volatileCast(a.ptr);
+    const pb: [*]const volatile u8 = @volatileCast(b.ptr);
     var diff: u8 = 0;
     var i: usize = 0;
-    while (i < a.len) : (i += 1) {
-        diff |= a[i] ^ b[i];
-    }
+    while (i < a.len) : (i += 1) diff |= pa[i] ^ pb[i];
+    std.atomic.fence(.seq_cst);
     return diff == 0;
 }
 
@@ -1252,7 +1395,7 @@ pub fn compareMemory(a: []const u8, b: []const u8) bool {
 }
 
 pub fn hashMemory(data: []const u8) u64 {
-    var hasher = std.hash.Wyhash.init(0x9E3779B97F4A7C15);
+    var hasher = std.hash.Wyhash.init(0);
     hasher.update(data);
     return hasher.final();
 }
@@ -1262,7 +1405,7 @@ pub fn alignForward(addr: usize, alignment: usize) !usize {
 }
 
 pub fn alignBackward(addr: usize, alignment: usize) !usize {
-    if (alignment == 0 or !isPow2(alignment)) return error.InvalidAlignment;
+    if (!isPow2(alignment)) return error.InvalidAlignment;
     return mem.alignBackward(usize, addr, alignment);
 }
 
@@ -1328,16 +1471,12 @@ pub fn atomicDec(ptr: *u64) u64 {
 
 pub fn memoryEfficientCopy(src: []const u8, dest: []u8) !void {
     if (dest.len < src.len) return error.DestinationTooSmall;
-    var i: usize = 0;
-    while (i < src.len) : (i += MemoryConfig.CACHE_LINE_SIZE) {
-        const end = @min(i + MemoryConfig.CACHE_LINE_SIZE, src.len);
-        @memcpy(dest[i..end], src[i..end]);
-    }
+    @memcpy(dest[0..src.len], src);
 }
 
 pub fn secureErase(ptr: [*]u8, size: usize) void {
     if (size == 0) return;
-    const p: [*]volatile u8 = ptr;
+    const p: [*]volatile u8 = @volatileCast(ptr);
     var i: usize = 0;
     while (i < size) : (i += 1) p[i] = 0x55;
     i = 0;
@@ -1348,6 +1487,7 @@ pub fn secureErase(ptr: [*]u8, size: usize) void {
 }
 
 pub fn duplicateMemory(allocator: Allocator, data: []const u8) ![]u8 {
+    if (data.len == 0) return emptyU8Slice();
     const dup = try allocator.alloc(u8, data.len);
     @memcpy(dup, data);
     return dup;
@@ -1355,6 +1495,7 @@ pub fn duplicateMemory(allocator: Allocator, data: []const u8) ![]u8 {
 
 pub fn concatenateMemory(allocator: Allocator, a: []const u8, b: []const u8) ![]u8 {
     const total = try addChecked(a.len, b.len);
+    if (total == 0) return emptyU8Slice();
     const cat = try allocator.alloc(u8, total);
     @memcpy(cat[0..a.len], a);
     @memcpy(cat[a.len..total], b);
@@ -1363,13 +1504,7 @@ pub fn concatenateMemory(allocator: Allocator, a: []const u8, b: []const u8) ![]
 
 pub fn searchMemory(haystack: []const u8, needle: []const u8) ?usize {
     if (needle.len == 0) return null;
-    if (needle.len > haystack.len) return null;
-
-    var i: usize = 0;
-    while (i + needle.len <= haystack.len) : (i += 1) {
-        if (mem.eql(u8, haystack[i .. i + needle.len], needle)) return i;
-    }
-    return null;
+    return mem.indexOf(u8, haystack, needle);
 }
 
 pub fn replaceMemory(data: []u8, old: u8, new: u8) void {
@@ -1396,24 +1531,32 @@ pub fn countMemory(data: []const u8, value: u8) usize {
 
 pub fn sumMemory(data: []const u8) u64 {
     var sum: u64 = 0;
-    for (data) |c| sum += c;
+    for (data) |c| sum +%= c;
     return sum;
 }
 
 pub fn productMemory(data: []const u8) u64 {
     var prod: u64 = 1;
-    for (data) |c| prod *= c;
+    for (data) |c| prod *%= c;
     return prod;
 }
 
-pub fn minMemory(data: []const u8) !u8 {
+pub fn minMemory(data: []const u8) EmptyError!u8 {
     if (data.len == 0) return error.Empty;
-    return mem.min(u8, data);
+    var m = data[0];
+    for (data[1..]) |c| {
+        if (c < m) m = c;
+    }
+    return m;
 }
 
-pub fn maxMemory(data: []const u8) !u8 {
+pub fn maxMemory(data: []const u8) EmptyError!u8 {
     if (data.len == 0) return error.Empty;
-    return mem.max(u8, data);
+    var m = data[0];
+    for (data[1..]) |c| {
+        if (c > m) m = c;
+    }
+    return m;
 }
 
 pub fn sortMemory(data: []u8) void {
@@ -1426,65 +1569,83 @@ pub fn shuffleMemory(data: []u8, seed: u64) void {
 }
 
 pub fn uniqueMemory(allocator: Allocator, data: []const u8) ![]u8 {
-    var set = std.AutoHashMap(u8, void).init(allocator);
-    defer set.deinit();
-    for (data) |c| try set.put(c, {});
-    var out = try allocator.alloc(u8, set.count());
-    var it = set.keyIterator();
+    var seen: [256]bool = [_]bool{false} ** 256;
+    var count: usize = 0;
+    for (data) |c| {
+        if (!seen[c]) {
+            seen[c] = true;
+            count += 1;
+        }
+    }
+    if (count == 0) return emptyU8Slice();
+    const out = try allocator.alloc(u8, count);
     var i: usize = 0;
-    while (it.next()) |k| {
-        out[i] = k.*;
-        i += 1;
+    var b: usize = 0;
+    while (b < 256) : (b += 1) {
+        if (seen[b]) {
+            out[i] = @intCast(b);
+            i += 1;
+        }
     }
     return out;
 }
 
 pub fn intersectMemory(allocator: Allocator, a: []const u8, b: []const u8) ![]u8 {
-    var set_a = std.AutoHashMap(u8, void).init(allocator);
-    defer set_a.deinit();
-    for (a) |c| try set_a.put(c, {});
+    var set_a: [256]bool = [_]bool{false} ** 256;
+    var added: [256]bool = [_]bool{false} ** 256;
+    for (a) |c| set_a[c] = true;
     var list = std.ArrayList(u8).init(allocator);
     defer list.deinit();
     for (b) |c| {
-        if (set_a.contains(c)) try list.append(c);
+        if (set_a[c] and !added[c]) {
+            added[c] = true;
+            try list.append(c);
+        }
     }
     return try list.toOwnedSlice();
 }
 
 pub fn unionMemory(allocator: Allocator, a: []const u8, b: []const u8) ![]u8 {
-    var set = std.AutoHashMap(u8, void).init(allocator);
-    defer set.deinit();
-    for (a) |c| try set.put(c, {});
-    for (b) |c| try set.put(c, {});
-    var out = try allocator.alloc(u8, set.count());
-    var it = set.keyIterator();
+    var seen: [256]bool = [_]bool{false} ** 256;
+    for (a) |c| seen[c] = true;
+    for (b) |c| seen[c] = true;
+    var count: usize = 0;
+    for (seen) |v| {
+        if (v) count += 1;
+    }
+    if (count == 0) return emptyU8Slice();
+    const out = try allocator.alloc(u8, count);
     var i: usize = 0;
-    while (it.next()) |k| {
-        out[i] = k.*;
-        i += 1;
+    var idx: usize = 0;
+    while (idx < 256) : (idx += 1) {
+        if (seen[idx]) {
+            out[i] = @intCast(idx);
+            i += 1;
+        }
     }
     return out;
 }
 
 pub fn differenceMemory(allocator: Allocator, a: []const u8, b: []const u8) ![]u8 {
-    var set_b = std.AutoHashMap(u8, void).init(allocator);
-    defer set_b.deinit();
-    for (b) |c| try set_b.put(c, {});
+    var set_b: [256]bool = [_]bool{false} ** 256;
+    var added: [256]bool = [_]bool{false} ** 256;
+    for (b) |c| set_b[c] = true;
     var list = std.ArrayList(u8).init(allocator);
     defer list.deinit();
     for (a) |c| {
-        if (!set_b.contains(c)) try list.append(c);
+        if (!set_b[c] and !added[c]) {
+            added[c] = true;
+            try list.append(c);
+        }
     }
     return try list.toOwnedSlice();
 }
 
 pub fn isSubsetMemory(allocator: Allocator, a: []const u8, b: []const u8) !bool {
-    var set_b = std.AutoHashMap(u8, void).init(allocator);
-    defer set_b.deinit();
-    for (b) |c| try set_b.put(c, {});
-    for (a) |c| {
-        if (!set_b.contains(c)) return false;
-    }
+    _ = allocator;
+    var set_b: [256]bool = [_]bool{false} ** 256;
+    for (b) |c| set_b[c] = true;
+    for (a) |c| if (!set_b[c]) return false;
     return true;
 }
 
@@ -1493,12 +1654,10 @@ pub fn isSupersetMemory(allocator: Allocator, a: []const u8, b: []const u8) !boo
 }
 
 pub fn isDisjointMemory(allocator: Allocator, a: []const u8, b: []const u8) !bool {
-    var set_a = std.AutoHashMap(u8, void).init(allocator);
-    defer set_a.deinit();
-    for (a) |c| try set_a.put(c, {});
-    for (b) |c| {
-        if (set_a.contains(c)) return false;
-    }
+    _ = allocator;
+    var set_a: [256]bool = [_]bool{false} ** 256;
+    for (a) |c| set_a[c] = true;
+    for (b) |c| if (set_a[c]) return false;
     return true;
 }
 
@@ -1514,21 +1673,16 @@ var global_memory_stats_mutex: Mutex = .{};
 pub fn trackAllocation(size: usize) void {
     global_memory_stats_mutex.lock();
     defer global_memory_stats_mutex.unlock();
-    const a = global_memory_stats.allocated +% size;
-    if (a < global_memory_stats.allocated) return;
-    global_memory_stats.allocated = a;
-    const current = a - global_memory_stats.freed;
-    if (current > global_memory_stats.peak) {
-        global_memory_stats.peak = current;
-    }
+    const new_alloc = std.math.add(usize, global_memory_stats.allocated, size) catch std.math.maxInt(usize);
+    global_memory_stats.allocated = new_alloc;
+    const current = saturatingSub(global_memory_stats.allocated, global_memory_stats.freed);
+    if (current > global_memory_stats.peak) global_memory_stats.peak = current;
 }
 
 pub fn trackFree(size: usize) void {
     global_memory_stats_mutex.lock();
     defer global_memory_stats_mutex.unlock();
-    const f0 = global_memory_stats.freed +% size;
-    if (f0 < global_memory_stats.freed) return;
-    global_memory_stats.freed = f0;
+    global_memory_stats.freed = std.math.add(usize, global_memory_stats.freed, size) catch std.math.maxInt(usize);
 }
 
 pub fn getMemoryStats() MemoryStats {
@@ -1545,15 +1699,15 @@ pub fn resetMemoryStats() void {
 
 pub fn memoryFootprint() usize {
     const s = getMemoryStats();
-    if (s.allocated < s.freed) return 0;
-    return s.allocated - s.freed;
+    return saturatingSub(s.allocated, s.freed);
 }
 
 pub fn memoryPressure() f32 {
     const s = getMemoryStats();
-    const cur = if (s.allocated < s.freed) 0 else s.allocated - s.freed;
+    const cur = saturatingSub(s.allocated, s.freed);
     if (s.peak == 0) return 0.0;
-    return @as(f32, @floatFromInt(cur)) / @as(f32, @floatFromInt(s.peak));
+    const ratio = @as(f32, @floatFromInt(cur)) / @as(f32, @floatFromInt(s.peak));
+    return if (ratio > 1.0) 1.0 else ratio;
 }
 
 pub const TrackingAllocator = struct {
@@ -1576,21 +1730,17 @@ pub const TrackingAllocator = struct {
 
     fn trackingAlloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
-        const p = self.parent.rawAlloc(len, ptr_align, ret_addr);
-        if (p != null) trackAllocation(len);
-        return p;
+        const ptr = self.parent.vtable.alloc(self.parent.ptr, len, ptr_align, ret_addr);
+        if (ptr != null) trackAllocation(len);
+        return ptr;
     }
 
     fn trackingResize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
         const old_len = buf.len;
-        const ok = self.parent.rawResize(buf, buf_align, new_len, ret_addr);
+        const ok = self.parent.vtable.resize(self.parent.ptr, buf, buf_align, new_len, ret_addr);
         if (ok) {
-            if (new_len > old_len) {
-                trackAllocation(new_len - old_len);
-            } else {
-                trackFree(old_len - new_len);
-            }
+            if (new_len > old_len) trackAllocation(new_len - old_len) else trackFree(old_len - new_len);
         }
         return ok;
     }
@@ -1598,57 +1748,56 @@ pub const TrackingAllocator = struct {
     fn trackingFree(ctx: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
         trackFree(buf.len);
-        self.parent.rawFree(buf, buf_align, ret_addr);
+        self.parent.vtable.free(self.parent.ptr, buf, buf_align, ret_addr);
     }
 };
 
 pub const ReadWriteLock = struct {
-    readers: u64,
+    readers: usize,
     writer: bool,
+    waiting_writers: usize,
     mutex: Mutex,
+    cond: CondVar,
 
     pub fn init() ReadWriteLock {
         return .{
             .readers = 0,
             .writer = false,
+            .waiting_writers = 0,
             .mutex = .{},
+            .cond = .{},
         };
     }
 
     pub fn readLock(self: *ReadWriteLock) void {
-        while (true) {
-            self.mutex.lock();
-            if (!@atomicLoad(bool, &self.writer, .acquire)) {
-                _ = @atomicRmw(u64, &self.readers, .Add, 1, .acq_rel);
-                self.mutex.unlock();
-                return;
-            }
-            self.mutex.unlock();
-            std.atomic.spinLoopHint();
-        }
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        while (self.writer or self.waiting_writers != 0) self.cond.wait(&self.mutex);
+        self.readers += 1;
     }
 
     pub fn readUnlock(self: *ReadWriteLock) void {
-        _ = @atomicRmw(u64, &self.readers, .Sub, 1, .acq_rel);
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        std.debug.assert(self.readers > 0);
+        self.readers -= 1;
+        if (self.readers == 0) self.cond.broadcast();
     }
 
     pub fn writeLock(self: *ReadWriteLock) void {
-        while (true) {
-            self.mutex.lock();
-            if (!@atomicLoad(bool, &self.writer, .acquire) and @atomicLoad(u64, &self.readers, .acquire) == 0) {
-                @atomicStore(bool, &self.writer, true, .release);
-                self.mutex.unlock();
-                return;
-            }
-            self.mutex.unlock();
-            std.atomic.spinLoopHint();
-        }
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.waiting_writers += 1;
+        defer self.waiting_writers -= 1;
+        while (self.writer or self.readers != 0) self.cond.wait(&self.mutex);
+        self.writer = true;
     }
 
     pub fn writeUnlock(self: *ReadWriteLock) void {
         self.mutex.lock();
-        @atomicStore(bool, &self.writer, false, .release);
+        self.writer = false;
         self.mutex.unlock();
+        self.cond.broadcast();
     }
 };
 
@@ -1661,13 +1810,13 @@ pub fn atomicFlagClear(flag: *bool) void {
 }
 
 pub fn spinLockAcquire(lock: *u64) void {
-    while (@cmpxchgStrong(u64, lock, 0, 1, .acquire, .monotonic) != null) {
+    while (@cmpxchgStrong(u64, lock, @as(u64, 0), @as(u64, 1), .acquire, .monotonic) != null) {
         std.atomic.spinLoopHint();
     }
 }
 
 pub fn spinLockRelease(lock: *u64) void {
-    @atomicStore(u64, lock, 0, .release);
+    @atomicStore(u64, lock, @as(u64, 0), .release);
 }
 
 pub fn memoryPatternFill(ptr: [*]u8, size: usize, pattern: []const u8) !void {
@@ -1692,101 +1841,112 @@ pub fn memoryPatternVerify(ptr: [*]const u8, size: usize, pattern: []const u8) !
 }
 
 pub fn virtualMemoryMap(addr: ?*anyopaque, size: usize, prot: u32, flags: u32) !*anyopaque {
+    if (builtin.os.tag == .windows) return error.Unsupported;
     if (size == 0) return error.InvalidSize;
-    const hint: ?[*]u8 = if (addr) |a| @ptrCast(a) else null;
-    const mapped = try std.os.mmap(hint, size, prot, flags, -1, 0);
+    const hint: ?[*]align(PageSize) u8 = if (addr) |a| @ptrFromInt(mem.alignBackward(usize, @intFromPtr(a), PageSize)) else null;
+    const mapped = try std.posix.mmap(hint, size, prot, @bitCast(flags), -1, 0);
     return @ptrCast(mapped.ptr);
 }
 
 pub fn virtualMemoryUnmap(addr: *anyopaque, size: usize) !void {
+    if (builtin.os.tag == .windows) return error.Unsupported;
     if (size == 0) return;
-    try std.os.munmap(@as([*]u8, @ptrCast(addr))[0..size]);
+    const base_addr = @intFromPtr(addr);
+    const aligned_addr = mem.alignBackward(usize, base_addr, PageSize);
+    const delta = base_addr - aligned_addr;
+    const span = try addChecked(size, delta);
+    const aligned_size = mem.alignForward(usize, span, PageSize);
+    const p: [*]align(PageSize) u8 = @ptrFromInt(aligned_addr);
+    try std.posix.munmap(p[0..aligned_size]);
 }
 
 pub fn protectMemory(addr: *anyopaque, size: usize, prot: u32) !void {
+    if (builtin.os.tag == .windows) return error.Unsupported;
     if (size == 0) return error.InvalidSize;
-
     const base_addr = @intFromPtr(addr);
     const aligned_addr = mem.alignBackward(usize, base_addr, PageSize);
     const delta = base_addr - aligned_addr;
     const span = try addChecked(size, delta);
     const aligned_size = mem.alignForward(usize, span, PageSize);
-
-    try std.os.mprotect(@as([*]align(PageSize) u8, @ptrFromInt(aligned_addr))[0..aligned_size], prot);
+    const p: [*]align(PageSize) u8 = @ptrFromInt(aligned_addr);
+    try std.posix.mprotect(p[0..aligned_size], prot);
 }
 
 pub fn lockMemory(addr: *anyopaque, size: usize) !void {
+    if (builtin.os.tag == .windows) return error.Unsupported;
     if (size == 0) return error.InvalidSize;
-
     const base_addr = @intFromPtr(addr);
     const aligned_addr = mem.alignBackward(usize, base_addr, PageSize);
     const delta = base_addr - aligned_addr;
     const span = try addChecked(size, delta);
     const aligned_size = mem.alignForward(usize, span, PageSize);
-
-    try std.os.mlock(@as([*]align(PageSize) u8, @ptrFromInt(aligned_addr))[0..aligned_size]);
+    const p: [*]align(PageSize) u8 = @ptrFromInt(aligned_addr);
+    try std.posix.mlock(p[0..aligned_size]);
 }
 
 pub fn unlockMemory(addr: *anyopaque, size: usize) !void {
+    if (builtin.os.tag == .windows) return error.Unsupported;
     if (size == 0) return;
     const base_addr = @intFromPtr(addr);
     const aligned_addr = mem.alignBackward(usize, base_addr, PageSize);
     const delta = base_addr - aligned_addr;
     const span = try addChecked(size, delta);
     const aligned_size = mem.alignForward(usize, span, PageSize);
-    try std.os.munlock(@as([*]align(PageSize) u8, @ptrFromInt(aligned_addr))[0..aligned_size]);
+    const p: [*]align(PageSize) u8 = @ptrFromInt(aligned_addr);
+    try std.posix.munlock(p[0..aligned_size]);
 }
 
 pub fn adviseMemory(addr: *anyopaque, size: usize, advice: i32) !void {
+    if (builtin.os.tag == .windows) return error.Unsupported;
     if (size == 0) return error.InvalidSize;
     const base_addr = @intFromPtr(addr);
     const aligned_addr = mem.alignBackward(usize, base_addr, PageSize);
     const delta = base_addr - aligned_addr;
     const span = try addChecked(size, delta);
     const aligned_size = mem.alignForward(usize, span, PageSize);
-    try std.os.madvise(@as([*]align(PageSize) u8, @ptrFromInt(aligned_addr))[0..aligned_size], advice);
+    const p: [*]align(PageSize) u8 = @ptrFromInt(aligned_addr);
+    try std.posix.madvise(p[0..aligned_size], @bitCast(advice));
 }
 
 pub fn prefetchMemory(addr: *const anyopaque, size: usize) void {
     const cache_line = MemoryConfig.CACHE_LINE_SIZE;
-    const p = @as([*]const u8, @ptrCast(addr));
+    const p: [*]const u8 = @ptrCast(addr);
     var i: usize = 0;
     while (i < size) : (i += cache_line) {
-        @prefetch(p + i, .{ .rw = .read, .locality = 3, .cache = .data });
+        @prefetch(p + i, .{ .rw = .read, .locality = 1, .cache = .data });
     }
 }
 
 pub fn trimExcessCapacity(allocator: Allocator, buf: []u8, used: usize) ![]u8 {
     if (used > buf.len) return error.InvalidSize;
     if (used == buf.len) return buf;
-    return try allocator.realloc(buf, used);
+    if (used == 0) {
+        allocator.free(buf);
+        return emptyU8Slice();
+    }
+    const out = try allocator.alloc(u8, used);
+    @memcpy(out, buf[0..used]);
+    allocator.free(buf);
+    return out;
 }
 
 pub fn splitMemory(allocator: Allocator, data: []const u8, delim: u8) ![][]const u8 {
-    var count: usize = 1;
-    for (data) |c| {
-        if (c == delim) count += 1;
-    }
-
-    const parts = try allocator.alloc([]const u8, count);
+    var parts = std.ArrayList([]const u8).init(allocator);
+    defer parts.deinit();
     var start: usize = 0;
     var i: usize = 0;
-
-    var j: usize = 0;
-    while (j < data.len) : (j += 1) {
-        if (data[j] == delim) {
-            parts[i] = data[start..j];
-            start = j + 1;
-            i += 1;
+    while (i < data.len) : (i += 1) {
+        if (data[i] == delim) {
+            try parts.append(data[start..i]);
+            start = i + 1;
         }
     }
-
-    parts[i] = data[start..];
-    return parts;
+    try parts.append(data[start..]);
+    return try parts.toOwnedSlice();
 }
 
 pub fn branchlessSelect(cond: bool, true_val: usize, false_val: usize) usize {
-    const mask: usize = @as(usize, 0) - @as(usize, @intFromBool(cond));
+    const mask: usize = ~@as(usize, 0) *% @as(usize, @intFromBool(cond));
     return (true_val & mask) | (false_val & ~mask);
 }
 
@@ -1799,9 +1959,7 @@ pub fn criticalSectionExit(mutex: *Mutex) void {
 }
 
 pub fn waitOnCondition(cond: *CondVar, mutex: *Mutex, predicate: *const fn () bool) void {
-    while (!predicate()) {
-        cond.wait(mutex);
-    }
+    while (!predicate()) cond.wait(mutex);
 }
 
 pub fn signalCondition(cond: *CondVar) void {
@@ -1821,78 +1979,65 @@ pub fn semaphorePost(sem: *Semaphore) void {
 }
 
 pub fn compressMemory(data: []const u8, allocator: Allocator) ![]u8 {
-    var list = std.ArrayList(u8).init(allocator);
-    errdefer list.deinit();
-
-    var compressor = try std.compress.deflate.compressor(list.writer(), .{ .level = .best_compression });
-    try compressor.writeAll(data);
-    try compressor.finish();
-
-    return try list.toOwnedSlice();
+    var out = std.ArrayList(u8).init(allocator);
+    defer out.deinit();
+    var i: usize = 0;
+    while (i < data.len) {
+        const value = data[i];
+        var run: usize = 1;
+        while (i + run < data.len and data[i + run] == value and run < 255) : (run += 1) {}
+        try out.append(@intCast(run));
+        try out.append(value);
+        i += run;
+    }
+    return try out.toOwnedSlice();
 }
 
 pub fn decompressMemory(data: []const u8, allocator: Allocator) ![]u8 {
-    var list = std.ArrayList(u8).init(allocator);
-    errdefer list.deinit();
-
-    var fbs = std.io.fixedBufferStream(data);
-    var decompressor = try std.compress.deflate.decompressor(fbs.reader());
-    var reader = decompressor.reader();
-
-    var buf: [4096]u8 = undefined;
-    while (true) {
-        const n = try reader.read(&buf);
-        if (n == 0) break;
-        try list.appendSlice(buf[0..n]);
+    if (data.len % 2 != 0) return error.InvalidData;
+    var out = std.ArrayList(u8).init(allocator);
+    defer out.deinit();
+    var i: usize = 0;
+    while (i < data.len) : (i += 2) {
+        const run = data[i];
+        const value = data[i + 1];
+        try out.appendNTimes(value, run);
     }
-
-    return try list.toOwnedSlice();
+    return try out.toOwnedSlice();
 }
 
+const AEAD = std.crypto.aead.chacha_poly.ChaCha20Poly1305;
+
 pub const EncryptedBlob = struct {
-    nonce: [12]u8,
-    tag: [16]u8,
+    nonce: [AEAD.nonce_length]u8,
+    tag: [AEAD.tag_length]u8,
     ciphertext: []u8,
     allocator: Allocator,
 
     pub fn deinit(self: *EncryptedBlob) void {
-        secureZeroMemory(@as([*]u8, @ptrCast(&self.nonce)), self.nonce.len);
-        secureZeroMemory(@as([*]u8, @ptrCast(&self.tag)), self.tag.len);
-        secureZeroMemory(self.ciphertext.ptr, self.ciphertext.len);
-        self.allocator.free(self.ciphertext);
+        secureZeroMemory((&self.nonce)[0..].ptr, self.nonce.len);
+        secureZeroMemory((&self.tag)[0..].ptr, self.tag.len);
+        if (self.ciphertext.len != 0) {
+            secureZeroMemory(self.ciphertext.ptr, self.ciphertext.len);
+            self.allocator.free(self.ciphertext);
+        }
         self.ciphertext = emptyU8Slice();
     }
 };
 
-pub fn encryptMemory(allocator: Allocator, plaintext: []const u8, key: [32]u8) !EncryptedBlob {
-    var nonce: [12]u8 = undefined;
+pub fn encryptMemory(allocator: Allocator, plaintext: []const u8, key: [AEAD.key_length]u8) !EncryptedBlob {
+    var nonce: [AEAD.nonce_length]u8 = undefined;
     std.crypto.random.bytes(&nonce);
-
-    const ciphertext = try allocator.alloc(u8, plaintext.len);
-    @memcpy(ciphertext, plaintext);
-
-    var tag: [16]u8 = undefined;
-    std.crypto.aead.chacha20poly1305.encrypt(ciphertext, &tag, ciphertext, "", nonce, key);
-
-    return .{
-        .nonce = nonce,
-        .tag = tag,
-        .ciphertext = ciphertext,
-        .allocator = allocator,
-    };
+    const ciphertext = if (plaintext.len == 0) emptyU8Slice() else try allocator.alloc(u8, plaintext.len);
+    var tag: [AEAD.tag_length]u8 = undefined;
+    AEAD.encrypt(ciphertext, &tag, plaintext, &[_]u8{}, nonce, key);
+    return .{ .nonce = nonce, .tag = tag, .ciphertext = ciphertext, .allocator = allocator };
 }
 
-pub fn decryptMemory(allocator: Allocator, blob: EncryptedBlob, key: [32]u8) ![]u8 {
-    const out = try allocator.alloc(u8, blob.ciphertext.len);
-    errdefer {
-        secureZeroMemory(out.ptr, out.len);
-        allocator.free(out);
-    }
-
-    std.crypto.aead.chacha20poly1305.decrypt(out, blob.ciphertext, blob.tag, "", blob.nonce, key) catch {
-        return error.AuthenticationFailed;
-    };
-
+pub fn decryptMemory(allocator: Allocator, blob: EncryptedBlob, key: [AEAD.key_length]u8) ![]u8 {
+    const out = if (blob.ciphertext.len == 0) emptyU8Slice() else try allocator.alloc(u8, blob.ciphertext.len);
+    errdefer if (out.len != 0) allocator.free(out);
+    AEAD.decrypt(out, blob.ciphertext, blob.tag, &[_]u8{}, blob.nonce, key) catch return error.AuthenticationFailed;
     return out;
 }
 
@@ -1901,13 +2046,14 @@ pub const CompressedStorage = struct {
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, data: []const u8) !CompressedStorage {
-        const compressed = try compressMemory(data, allocator);
-        return .{ .compressed = compressed, .allocator = allocator };
+        return .{ .compressed = try compressMemory(data, allocator), .allocator = allocator };
     }
 
     pub fn deinit(self: *CompressedStorage) void {
-        secureZeroMemory(self.compressed.ptr, self.compressed.len);
-        self.allocator.free(self.compressed);
+        if (self.compressed.len != 0) {
+            secureZeroMemory(self.compressed.ptr, self.compressed.len);
+            self.allocator.free(self.compressed);
+        }
         self.compressed = emptyU8Slice();
     }
 
@@ -1918,17 +2064,16 @@ pub const CompressedStorage = struct {
 
 pub const EncryptedStorage = struct {
     encrypted: EncryptedBlob,
-    key: [32]u8,
+    key: [AEAD.key_length]u8,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, data: []const u8, key: [32]u8) !EncryptedStorage {
-        const encrypted = try encryptMemory(allocator, data, key);
-        return .{ .encrypted = encrypted, .key = key, .allocator = allocator };
+    pub fn init(allocator: Allocator, data: []const u8, key: [AEAD.key_length]u8) !EncryptedStorage {
+        return .{ .encrypted = try encryptMemory(allocator, data, key), .key = key, .allocator = allocator };
     }
 
     pub fn deinit(self: *EncryptedStorage) void {
         self.encrypted.deinit();
-        secureZeroMemory(@as([*]u8, @ptrCast(&self.key)), self.key.len);
+        secureZeroMemory((&self.key)[0..].ptr, self.key.len);
     }
 
     pub fn decrypt(self: *const EncryptedStorage) ![]u8 {
@@ -1937,10 +2082,8 @@ pub const EncryptedStorage = struct {
 };
 
 pub fn memoryAlign(ptr: *anyopaque, alignment: usize) !*anyopaque {
-    if (alignment == 0 or !isPow2(alignment)) return error.InvalidAlignment;
-    const addr = @intFromPtr(ptr);
-    const aligned_addr = mem.alignForward(usize, addr, alignment);
-    return @ptrFromInt(aligned_addr);
+    if (!isPow2(alignment)) return error.InvalidAlignment;
+    return @ptrFromInt(mem.alignForward(usize, @intFromPtr(ptr), alignment));
 }
 
 pub fn isMemoryOverlap(a_start: *const anyopaque, a_size: usize, b_start: *const anyopaque, b_size: usize) !bool {
@@ -1948,7 +2091,7 @@ pub fn isMemoryOverlap(a_start: *const anyopaque, a_size: usize, b_start: *const
     const b_addr = @intFromPtr(b_start);
     const a_end = try addChecked(a_addr, a_size);
     const b_end = try addChecked(b_addr, b_size);
-    return (a_addr < b_end) and (b_addr < a_end);
+    return a_addr < b_end and b_addr < a_end;
 }
 
 pub fn copyNonOverlapping(dest: []u8, src: []const u8) !void {
@@ -1959,7 +2102,11 @@ pub fn copyNonOverlapping(dest: []u8, src: []const u8) !void {
 
 pub fn moveMemory(dest: []u8, src: []const u8) !void {
     if (dest.len != src.len) return error.SizeMismatch;
-    mem.copyBackwards(u8, dest, src);
+    if (@intFromPtr(dest.ptr) <= @intFromPtr(src.ptr)) {
+        mem.copyForwards(u8, dest, src);
+    } else {
+        mem.copyBackwards(u8, dest, src);
+    }
 }
 
 pub const MemoryPool = PoolAllocator;
@@ -1967,26 +2114,26 @@ pub const MemoryArena = Arena;
 pub const MemorySlab = SlabAllocator;
 pub const MemoryBuddy = BuddyAllocator;
 pub const MemoryLockFreeQueue = LockFreeQueue;
-pub const MemoryLockFreeStack = MutexStack;
+pub const MemoryLockFreeStack = LockFreeStack;
 
 const testing = std.testing;
 
 test "Arena allocation" {
     var arena = try Arena.init(testing.allocator, 1024);
     defer arena.deinit();
-    const ptr1 = arena.alloc(128, 8).?;
-    const ptr2 = arena.alloc(64, 4).?;
-    try testing.expect(ptr1.len == 128);
-    try testing.expect(ptr2.len == 64);
+    const ptr1 = arena.alloc(128, 8) orelse return error.OutOfMemory;
+    const ptr2 = arena.alloc(64, 4) orelse return error.OutOfMemory;
+    try testing.expectEqual(@as(usize, 128), ptr1.len);
+    try testing.expectEqual(@as(usize, 64), ptr2.len);
 }
 
 test "SlabAllocator" {
     var slab = try SlabAllocator.init(testing.allocator, 256, 4, 64);
     defer slab.deinit();
-    const ptr1 = slab.alloc(100).?;
-    const ptr2 = slab.alloc(150).?;
-    try testing.expect(ptr1.len == 100);
-    try testing.expect(ptr2.len == 150);
+    const ptr1 = slab.alloc(100) orelse return error.OutOfMemory;
+    const ptr2 = slab.alloc(150) orelse return error.OutOfMemory;
+    try testing.expectEqual(@as(usize, 100), ptr1.len);
+    try testing.expectEqual(@as(usize, 150), ptr2.len);
     try slab.free(ptr1);
     try slab.free(ptr2);
 }
@@ -1994,10 +2141,10 @@ test "SlabAllocator" {
 test "PoolAllocator" {
     var pool = try PoolAllocator.init(testing.allocator, 64, 16, 2);
     defer pool.deinit();
-    const ptr1 = pool.alloc(64).?;
-    const ptr2 = pool.alloc(64).?;
-    try testing.expect(ptr1.len == 64);
-    try testing.expect(ptr2.len == 64);
+    const ptr1 = pool.alloc(64) orelse return error.OutOfMemory;
+    const ptr2 = pool.alloc(64) orelse return error.OutOfMemory;
+    try testing.expectEqual(@as(usize, 64), ptr1.len);
+    try testing.expectEqual(@as(usize, 64), ptr2.len);
     try pool.free(ptr1);
     try pool.free(ptr2);
 }
@@ -2005,8 +2152,8 @@ test "PoolAllocator" {
 test "PageAllocator" {
     var page_alloc = try PageAllocator.init(testing.allocator, 4);
     defer page_alloc.deinit();
-    const pages = page_alloc.allocPages(2).?;
-    try testing.expect(pages.len == 8192);
+    const pages = page_alloc.allocPages(2) orelse return error.OutOfMemory;
+    try testing.expectEqual(@as(usize, 2 * PageSize), pages.len);
     try page_alloc.freePages(pages);
 }
 
@@ -2023,21 +2170,18 @@ test "ResizeBuffer" {
     try buf.append("hello");
     try buf.append(" world");
     const owned = try buf.toOwnedSlice();
-    defer testing.allocator.free(owned);
+    defer if (owned.len != 0) testing.allocator.free(owned);
     try testing.expectEqualStrings("hello world", owned);
 }
 
 test "ArenaAllocator basic allocation" {
     var arena = ArenaAllocator.init(testing.allocator, 1024);
     defer arena.deinit();
-
     const alloc = arena.allocator();
     const slice1 = try alloc.alloc(u8, 100);
     const slice2 = try alloc.alloc(u8, 100);
-
     @memset(slice1, 42);
     @memset(slice2, 84);
-
     try testing.expectEqual(@as(u8, 42), slice1[0]);
     try testing.expectEqual(@as(u8, 84), slice2[0]);
 }
@@ -2045,9 +2189,7 @@ test "ArenaAllocator basic allocation" {
 test "zero copy transfer" {
     var src = [_]u8{ 1, 2, 3, 4, 5 };
     var dest: [5]u8 = undefined;
-
     zeroCopyTransfer(&src, &dest);
-
     try testing.expectEqualSlices(u8, &src, &dest);
 }
 
@@ -2055,11 +2197,9 @@ test "memory hashing" {
     const data1 = "hello world";
     const data2 = "hello world";
     const data3 = "hello world!";
-
     const hash1 = hashMemory(data1);
     const hash2 = hashMemory(data2);
     const hash3 = hashMemory(data3);
-
     try testing.expectEqual(hash1, hash2);
     try testing.expect(hash1 != hash3);
 }
@@ -2068,7 +2208,6 @@ test "memory comparison constant time" {
     const data1 = "test";
     const data2 = "test";
     const data3 = "best";
-
     try testing.expect(compareMemory(data1, data2));
     try testing.expect(!compareMemory(data1, data3));
 }
@@ -2076,7 +2215,6 @@ test "memory comparison constant time" {
 test "search memory" {
     const haystack = "hello world, hello universe";
     const needle = "world";
-
     const pos = searchMemory(haystack, needle);
     try testing.expect(pos != null);
     try testing.expectEqual(@as(usize, 6), pos.?);
@@ -2091,30 +2229,25 @@ test "count memory" {
 test "unique memory" {
     const data = "aabbccddaa";
     const uniq = try uniqueMemory(testing.allocator, data);
-    defer testing.allocator.free(uniq);
-    try testing.expect(uniq.len == 4);
+    defer if (uniq.len != 0) testing.allocator.free(uniq);
+    try testing.expectEqual(@as(usize, 4), uniq.len);
 }
 
 test "atomic operations" {
     var value: u64 = 0;
-
     const prev = atomicAdd(&value, 5);
     try testing.expectEqual(@as(u64, 0), prev);
     try testing.expectEqual(@as(u64, 5), atomicLoad(&value));
-
     atomicStore(&value, 10);
     try testing.expectEqual(@as(u64, 10), atomicLoad(&value));
-
     _ = atomicInc(&value);
     try testing.expectEqual(@as(u64, 11), atomicLoad(&value));
 }
 
 test "ReadWriteLock" {
     var rwlock = ReadWriteLock.init();
-
     rwlock.readLock();
     rwlock.readUnlock();
-
     rwlock.writeLock();
     rwlock.writeUnlock();
 }
@@ -2122,19 +2255,16 @@ test "ReadWriteLock" {
 test "BuddyAllocator" {
     var buddy = try BuddyAllocator.init(testing.allocator, 4096, 6);
     defer buddy.deinit();
-
     const ptr1 = try buddy.alloc(128);
-    try testing.expect(ptr1.len == 128);
+    try testing.expectEqual(@as(usize, 128), ptr1.len);
     try buddy.free(ptr1);
 }
 
 test "LockFreeQueue" {
     var queue = try LockFreeQueue.init(testing.allocator, 16);
     defer queue.deinit();
-
     var item: usize = 42;
     try testing.expect(queue.enqueue(@as(*anyopaque, @ptrCast(&item))));
-
     const retrieved = queue.dequeue();
     try testing.expect(retrieved != null);
     try testing.expectEqual(@intFromPtr(@as(*anyopaque, @ptrCast(&item))), @intFromPtr(retrieved.?));
@@ -2143,10 +2273,8 @@ test "LockFreeQueue" {
 test "LockFreeStack" {
     var stack = LockFreeStack.init(testing.allocator);
     defer stack.deinit();
-
     var item: usize = 42;
     try stack.push(@as(*anyopaque, @ptrCast(&item)));
-
     const retrieved = stack.pop();
     try testing.expect(retrieved != null);
     try testing.expectEqual(@intFromPtr(@as(*anyopaque, @ptrCast(&item))), @intFromPtr(retrieved.?));
@@ -2154,11 +2282,9 @@ test "LockFreeStack" {
 
 test "memory stats tracking" {
     resetMemoryStats();
-
     trackAllocation(100);
     trackAllocation(200);
     trackFree(50);
-
     const stats = getMemoryStats();
     try testing.expectEqual(@as(usize, 300), stats.allocated);
     try testing.expectEqual(@as(usize, 50), stats.freed);

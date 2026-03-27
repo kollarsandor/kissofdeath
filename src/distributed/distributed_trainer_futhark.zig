@@ -376,8 +376,8 @@ pub const DistributedTrainerFuthark = struct {
         var writer = buffered_writer.writer();
 
         try writer.writeInt(u32, self.config.checkpoint_version, .little);
-        try writer.writeInt(u64, @as(u64, @intCast(self.global_step)), .Little);
-        try writer.writeInt(u64, @as(u64, @intCast(self.model_dim)), .Little);
+        try writer.writeInt(u64, @as(u64, @intCast(self.global_step)), .little);
+        try writer.writeInt(u64, @as(u64, @intCast(self.model_dim)), .little);
 
         const weights_s_vals = try self.accelerator.weights_s.values(&self.accelerator.ctx, self.allocator);
         defer {
@@ -390,7 +390,7 @@ pub const DistributedTrainerFuthark = struct {
         for (weights_s_vals) |row| {
             for (row) |weight| {
                 const weight_f32: f32 = @floatCast(weight);
-                try writer.writeInt(u32, @as(u32, @bitCast(weight_f32)), .Little);
+                try writer.writeInt(u32, @as(u32, @bitCast(weight_f32)), .little);
             }
         }
 
@@ -405,7 +405,7 @@ pub const DistributedTrainerFuthark = struct {
         for (weights_t_vals) |row| {
             for (row) |weight| {
                 const weight_f32: f32 = @floatCast(weight);
-                try writer.writeInt(u32, @as(u32, @bitCast(weight_f32)), .Little);
+                try writer.writeInt(u32, @as(u32, @bitCast(weight_f32)), .little);
             }
         }
 

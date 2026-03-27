@@ -2368,7 +2368,7 @@ pub const Tensor = struct {
             j = i + 1;
             while (j < n) : (j += 1) {
                 var sum_result2: f32 = 0.0;
-                k = 0;
+                var k: usize = 0;
                 while (k < i) : (k += 1) {
                     sum_result2 += l.data.ptr[j * n + k] * u.data.ptr[k * n + i];
                 }
@@ -2611,9 +2611,9 @@ pub const Tensor = struct {
     }
 
     pub fn save(self: *const Tensor, writer: anytype) !void {
-        try writer.writeInt(u64, @as(u64, self.shape.dims.len), .Little);
+        try writer.writeInt(u64, @as(u64, self.shape.dims.len), .little);
         for (self.shape.dims) |dim| {
-            try writer.writeInt(u64, @as(u64, dim), .Little);
+            try writer.writeInt(u64, @as(u64, dim), .little);
         }
         const total_size = try self.shape.totalSize();
         var indices = try self.data.allocator.alloc(usize, self.shape.dims.len);

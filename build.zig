@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     main_exe.linkLibC();
     main_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
     main_exe.addIncludePath(futhark_include);
-    main_exe.addOptions("build_options", build_options);
+    main_exe.root_module.addOptions("build_options", build_options);
     b.installArtifact(main_exe);
 
     const distributed_exe = b.addExecutable(.{
@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
     distributed_exe.linkLibC();
     distributed_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
     distributed_exe.addIncludePath(futhark_include);
-    distributed_exe.addOptions("build_options", build_options);
+    distributed_exe.root_module.addOptions("build_options", build_options);
     b.installArtifact(distributed_exe);
 
     const distributed_futhark_exe = b.addExecutable(.{
@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) void {
     distributed_futhark_exe.linkLibC();
     distributed_futhark_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
     distributed_futhark_exe.addIncludePath(futhark_include);
-    distributed_futhark_exe.addOptions("build_options", build_options);
+    distributed_futhark_exe.root_module.addOptions("build_options", build_options);
     b.installArtifact(distributed_futhark_exe);
 
     const gpu_exe = b.addExecutable(.{
@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
     gpu_exe.linkLibC();
     gpu_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
     gpu_exe.addIncludePath(futhark_include);
-    gpu_exe.addOptions("build_options", build_options);
+    gpu_exe.root_module.addOptions("build_options", build_options);
     b.installArtifact(gpu_exe);
 
     const inference_server_exe = b.addExecutable(.{
@@ -69,7 +69,7 @@ pub fn build(b: *std.Build) void {
     inference_server_exe.linkLibC();
     inference_server_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
     inference_server_exe.addIncludePath(futhark_include);
-    inference_server_exe.addOptions("build_options", build_options);
+    inference_server_exe.root_module.addOptions("build_options", build_options);
     b.installArtifact(inference_server_exe);
 
     const run_cmd = b.addRunArtifact(main_exe);
@@ -94,7 +94,7 @@ pub fn build(b: *std.Build) void {
     main_tests.linkLibC();
     main_tests.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
     main_tests.addIncludePath(futhark_include);
-    main_tests.addOptions("build_options", build_options);
+    main_tests.root_module.addOptions("build_options", build_options);
     const run_main_tests = b.addRunArtifact(main_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_main_tests.step);

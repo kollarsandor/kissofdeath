@@ -311,7 +311,7 @@ pub const DatasetFingerprint = struct {
         var hasher = Blake3.init(.{});
         hasher.update(sample);
         var len_bytes: [8]u8 = undefined;
-        std.mem.writeInt(u64, &len_bytes, @intCast(sample.len), .Little);
+        std.mem.writeInt(u64, &len_bytes, @intCast(sample.len), .little);
         hasher.update(&len_bytes);
         var sample_hash: [32]u8 = undefined;
         hasher.final(&sample_hash);

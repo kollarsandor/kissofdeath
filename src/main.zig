@@ -11,6 +11,10 @@ const mgt_mod = @import("tokenizer/mgt.zig");
 const sfd_mod = @import("optimizer/sfd.zig");
 const ssi_mod = @import("index/ssi.zig");
 const ranker_mod = @import("ranker/ranker.zig");
+const learned_embedding_mod = @import("core/learned_embedding.zig");
+const oftb_mod = @import("processor/oftb.zig");
+const LearnedEmbedding = learned_embedding_mod.LearnedEmbedding;
+const OFTBMixer = oftb_mod.OFTB;
 
 const accel_interface = @import("hw/accel/accel_interface.zig");
 const cuda_bindings = @import("hw/accel/cuda_bindings.zig");
@@ -113,7 +117,11 @@ pub const MainConfig = struct {
     pub const FILE_MAGIC_MGT: u32 = 0x4A4D4754;
     pub const FILE_MAGIC_RANKER: u32 = 0x4A524E4B;
     pub const FILE_MAGIC_PROJ: u32 = 0x4A50524A;
+    pub const FILE_MAGIC_EMB: u32 = 0x4A454D42;
     pub const FILE_VERSION: u32 = 1;
+    pub const PRNG_SEED_EMBEDDING: u64 = 77777;
+    pub const SFD_MOMENTUM: f32 = 0.9;
+    pub const NSIR_MODULATION_FACTOR: f32 = 1.05;
     pub const MAX_LINE_LENGTH: usize = 65536;
     pub const MAX_VOCAB_SIZE: u32 = std.math.maxInt(u32);
     pub const MAX_TOKEN_LENGTH: u32 = 65536;
@@ -754,6 +762,38 @@ fn scatterRSFParams(rsf: *RSF, flat: []const f32) void {
     }
 }
 
+fn nsirModulateInPlace(data: []f32, modulation_factor: f32) void {
+    if (data.len == 0) return;
+    var mean: f32 = 0.0;
+    for (data) |v| {
+        mean += v;
+    }
+    mean /= @as(f32, @floatFromInt(data.len));
+    var i: usize = 0;
+    while (i < data.len) : (i += 1) {
+        if (data[i] > mean) {
+            data[i] *= modulation_factor;
+        }
+    }
+}
+
+fn nsirModulateBackward(grad: []f32, activations: []const f32, modulation_factor: f32) void {
+    if (grad.len == 0 or activations.len == 0) return;
+    const len = @min(grad.len, activations.len);
+    var mean: f32 = 0.0;
+    var k: usize = 0;
+    while (k < len) : (k += 1) {
+        mean += activations[k];
+    }
+    mean /= @as(f32, @floatFromInt(len));
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (activations[i] > mean) {
+            grad[i] *= modulation_factor;
+        }
+    }
+}
+
 fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
     const stdout = std.io.getStdOut().writer();
     try stdout.writeAll("Initializing training...\n");
@@ -774,28 +814,36 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
 
     const vocab_size = mgt.vocabSize();
 
+    var embed = try LearnedEmbedding.init(allocator, vocab_size, dim, MainConfig.PRNG_SEED_EMBEDDING);
+    defer embed.deinit();
+
+    const oftb = OFTBMixer.init(dim);
+
     var proj = try Projection.init(allocator, dim * 2, vocab_size, MainConfig.PRNG_SEED_FORWARD);
     defer proj.deinit();
 
+    try stdout.print("LearnedEmbedding: vocab={d}, dim={d}\n", .{ vocab_size, dim });
+    try stdout.print("OFTB: fractal_scale={d:.6}\n", .{oftb.fractal_scale});
     try stdout.print("Projection layer: hidden_dim={d}, vocab_size={d}\n", .{ dim * 2, vocab_size });
 
-    const rsf_param_count = try flattenRSFParams(allocator, &rsf);
-    const rsf_total_params = rsf_param_count.len;
-    allocator.free(rsf_param_count);
+    const embed_param_count = embed.paramCount();
+    const rsf_param_count_buf = try flattenRSFParams(allocator, &rsf);
+    const rsf_total_params = rsf_param_count_buf.len;
+    allocator.free(rsf_param_count_buf);
 
     const proj_total_params = proj.weights.data.len + proj.bias.data.len;
-    const sfd_param_size = rsf_total_params + proj_total_params;
+    const sfd_param_size = embed_param_count + rsf_total_params + proj_total_params;
 
     var sfd = try SFD.init(allocator, sfd_param_size);
     defer sfd.deinit();
 
-    try stdout.print("SFD optimizer: param_size={d} (RSF={d}, Proj={d})\n", .{ sfd_param_size, rsf_total_params, proj_total_params });
+    try stdout.print("SFD optimizer: param_size={d} (Embed={d}, RSF={d}, Proj={d})\n", .{ sfd_param_size, embed_param_count, rsf_total_params, proj_total_params });
 
     var samples: []TrainingSample = undefined;
 
     if (config.dataset_path) |dataset_path| {
         try stdout.print("Loading dataset from: {s}\n", .{dataset_path});
-        samples = loadDatasetSamples(allocator, mgt, dataset_path, config.sample_limit) catch |err| blk: {
+        samples = loadDatasetSamples(allocator, &mgt, dataset_path, config.sample_limit) catch |err| blk: {
             try stdout.print("Dataset load failed ({any}), using synthetic samples\n", .{err});
             break :blk try generateSyntheticSamples(allocator, &mgt, config.num_training_samples);
         };
@@ -812,8 +860,6 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
     }
 
     const tensor_dim = dim * 2;
-    var input = try Tensor.init(allocator, &.{ 1, tensor_dim });
-    defer input.deinit();
 
     var activations = try Tensor.init(allocator, &.{ layers + 1, tensor_dim });
     defer activations.deinit();
@@ -850,6 +896,7 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
             const batch = samples[batch_start..batch_end];
 
             try rsf.zeroGradients();
+            embed.zeroGrad();
             @memset(hidden_grad, 0.0);
             @memset(all_grads, 0.0);
 
@@ -861,7 +908,10 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
                 const context_len = @min(sample.tokens.len - 1, dim);
                 if (context_len >= sample.tokens.len) continue;
 
-                try createEmbeddingInPlace(&input, sample.tokens[0..context_len], mgt.vocabSize(), dim);
+                var input = try embed.forward(allocator, sample.tokens[0..context_len], tensor_dim);
+                defer input.deinit();
+
+                oftb.forwardInPlace(&input);
 
                 @memcpy(activations.data[0..tensor_dim], input.data);
 
@@ -877,6 +927,8 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
                 var final_activations = try Tensor.init(allocator, &.{ 1, tensor_dim });
                 defer final_activations.deinit();
                 @memcpy(final_activations.data, activations.data[layers * tensor_dim .. (layers + 1) * tensor_dim]);
+
+                nsirModulateInPlace(final_activations.data, MainConfig.NSIR_MODULATION_FACTOR);
 
                 proj.forward(&final_activations, logits);
 
@@ -905,12 +957,13 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
 
                 probs[target_idx] -= 1.0;
 
+                @memset(hidden_grad, 0.0);
                 const h_dim = @min(final_activations.data.len, proj.hidden_dim);
 
                 var vi: usize = 0;
                 while (vi < vocab_size) : (vi += 1) {
                     const grad_v = probs[vi];
-                    const bias_grad_idx = rsf_total_params + proj.weights.data.len + vi;
+                    const bias_grad_idx = embed_param_count + rsf_total_params + proj.weights.data.len + vi;
                     if (bias_grad_idx < all_grads.len) {
                         all_grads[bias_grad_idx] += grad_v;
                     }
@@ -919,7 +972,7 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
                     while (hi < h_dim) : (hi += 1) {
                         const w_idx = hi * vocab_size + vi;
                         if (w_idx < proj.weights.data.len) {
-                            const grad_idx = rsf_total_params + w_idx;
+                            const grad_idx = embed_param_count + rsf_total_params + w_idx;
                             if (grad_idx < all_grads.len) {
                                 all_grads[grad_idx] += grad_v * final_activations.data[hi];
                             }
@@ -937,6 +990,8 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
                         }
                     }
                 }
+
+                nsirModulateBackward(hidden_grad, activations.data[layers * tensor_dim .. (layers + 1) * tensor_dim], MainConfig.NSIR_MODULATION_FACTOR);
 
                 const clip_norm = config.gradient_clip_norm;
                 var grad_sq_sum: f32 = 0.0;
@@ -993,17 +1048,23 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
                         }
                     }
                 }
+
+                oftb.backwardInPlace(hidden_grad);
+                embed.backward(sample.tokens[0..context_len], hidden_grad);
             }
+
+            embed.flattenParams(all_params[0..embed_param_count]);
+            embed.flattenGrads(all_grads[0..embed_param_count]);
 
             const rsf_flat_params = try flattenRSFParams(allocator, &rsf);
             defer allocator.free(rsf_flat_params);
-            @memcpy(all_params[0..rsf_total_params], rsf_flat_params);
-            @memcpy(all_params[rsf_total_params .. rsf_total_params + proj.weights.data.len], proj.weights.data);
-            @memcpy(all_params[rsf_total_params + proj.weights.data.len .. sfd_param_size], proj.bias.data);
+            @memcpy(all_params[embed_param_count .. embed_param_count + rsf_total_params], rsf_flat_params);
+            @memcpy(all_params[embed_param_count + rsf_total_params .. embed_param_count + rsf_total_params + proj.weights.data.len], proj.weights.data);
+            @memcpy(all_params[embed_param_count + rsf_total_params + proj.weights.data.len .. sfd_param_size], proj.bias.data);
 
             const rsf_flat_grads = try flattenRSFGradients(allocator, &rsf);
             defer allocator.free(rsf_flat_grads);
-            @memcpy(all_grads[0..rsf_total_params], rsf_flat_grads);
+            @memcpy(all_grads[embed_param_count .. embed_param_count + rsf_total_params], rsf_flat_grads);
 
             @memcpy(sfd_param_tensor.data, all_params);
             @memcpy(sfd_grad_tensor.data, all_grads);
@@ -1011,9 +1072,10 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
             try sfd.update(&sfd_grad_tensor, &sfd_param_tensor, config.learning_rate);
 
             @memcpy(all_params, sfd_param_tensor.data);
-            scatterRSFParams(&rsf, all_params[0..rsf_total_params]);
-            @memcpy(proj.weights.data, all_params[rsf_total_params .. rsf_total_params + proj.weights.data.len]);
-            @memcpy(proj.bias.data, all_params[rsf_total_params + proj.weights.data.len .. sfd_param_size]);
+            embed.scatterParams(all_params[0..embed_param_count]);
+            scatterRSFParams(&rsf, all_params[embed_param_count .. embed_param_count + rsf_total_params]);
+            @memcpy(proj.weights.data, all_params[embed_param_count + rsf_total_params .. embed_param_count + rsf_total_params + proj.weights.data.len]);
+            @memcpy(proj.bias.data, all_params[embed_param_count + rsf_total_params + proj.weights.data.len .. sfd_param_size]);
 
             if (rsf.isGPUAvailable()) try rsf.syncWeightsToGPU();
 
@@ -1038,6 +1100,10 @@ fn runTraining(allocator: std.mem.Allocator, config: *const Config) !void {
     const proj_path = try std.fmt.allocPrint(allocator, "{s}/projection.bin", .{config.models_dir});
     defer allocator.free(proj_path);
     try proj.save(proj_path);
+
+    const emb_path = try std.fmt.allocPrint(allocator, "{s}/embedding.bin", .{config.models_dir});
+    defer allocator.free(emb_path);
+    try embed.save(emb_path);
 
     try stdout.writeAll("Training complete. Models saved.\n");
 }
@@ -1331,16 +1397,16 @@ fn saveRSF(rsf: *const RSF, path: []const u8) !void {
     try writer.writeInt(u32, MainConfig.FILE_MAGIC_RSF, .little);
     try writer.writeInt(u32, MainConfig.FILE_VERSION, .little);
     const sc = rsf.ctrl orelse return error.NotInitialized;
-    try writer.writeInt(u64, @as(u64, @intCast(sc.num_layers)), .Little);
-    try writer.writeInt(u64, @as(u64, @intCast(sc.dim)), .Little);
+    try writer.writeInt(u64, @as(u64, @intCast(sc.num_layers)), .little);
+    try writer.writeInt(u64, @as(u64, @intCast(sc.dim)), .little);
 
     var l: usize = 0;
     while (l < sc.num_layers) : (l += 1) {
         const layer = &sc.layers[l];
-        for (layer.s_weight.data) |w| { try writer.writeInt(u32, @as(u32, @bitCast(w)), .Little); }
-        for (layer.t_weight.data) |w| { try writer.writeInt(u32, @as(u32, @bitCast(w)), .Little); }
-        for (layer.s_bias.data) |w| { try writer.writeInt(u32, @as(u32, @bitCast(w)), .Little); }
-        for (layer.t_bias.data) |w| { try writer.writeInt(u32, @as(u32, @bitCast(w)), .Little); }
+        for (layer.s_weight.data) |w| { try writer.writeInt(u32, @as(u32, @bitCast(w)), .little); }
+        for (layer.t_weight.data) |w| { try writer.writeInt(u32, @as(u32, @bitCast(w)), .little); }
+        for (layer.s_bias.data) |w| { try writer.writeInt(u32, @as(u32, @bitCast(w)), .little); }
+        for (layer.t_bias.data) |w| { try writer.writeInt(u32, @as(u32, @bitCast(w)), .little); }
     }
 
     try buf_writer.flush();
@@ -1358,7 +1424,7 @@ fn saveMGT(mgt: *const MGT, path: []const u8) !void {
 
     const vocab_size = mgt.vocabSize();
     if (vocab_size > MainConfig.MAX_VOCAB_SIZE) return error.VocabTooLarge;
-    try writer.writeInt(u32, @as(u32, @intCast(vocab_size)), .Little);
+    try writer.writeInt(u32, @as(u32, @intCast(vocab_size)), .little);
 
     const VocabEntry = struct { key: []const u8, val: u32 };
 
@@ -1381,7 +1447,7 @@ fn saveMGT(mgt: *const MGT, path: []const u8) !void {
         const token = entry.key;
         const id = entry.val;
         if (token.len > MainConfig.MAX_TOKEN_LENGTH) return error.TokenTooLong;
-        try writer.writeInt(u32, @as(u32, @intCast(token.len)), .Little);
+        try writer.writeInt(u32, @as(u32, @intCast(token.len)), .little);
         try writer.writeAll(token);
         try writer.writeInt(u32, id, .little);
     }
@@ -1447,14 +1513,14 @@ const Projection = struct {
 
         try writer.writeInt(u32, MainConfig.FILE_MAGIC_PROJ, .little);
         try writer.writeInt(u32, MainConfig.FILE_VERSION, .little);
-        try writer.writeInt(u64, @as(u64, @intCast(self.hidden_dim)), .Little);
-        try writer.writeInt(u64, @as(u64, @intCast(self.vocab_size)), .Little);
+        try writer.writeInt(u64, @as(u64, @intCast(self.hidden_dim)), .little);
+        try writer.writeInt(u64, @as(u64, @intCast(self.vocab_size)), .little);
 
         for (self.weights.data) |w| {
-            try writer.writeInt(u32, @as(u32, @bitCast(w)), .Little);
+            try writer.writeInt(u32, @as(u32, @bitCast(w)), .little);
         }
         for (self.bias.data) |b| {
-            try writer.writeInt(u32, @as(u32, @bitCast(b)), .Little);
+            try writer.writeInt(u32, @as(u32, @bitCast(b)), .little);
         }
 
         try buf_writer.flush();
@@ -1609,13 +1675,11 @@ fn sampleTopK(logits: []f32, k_param: usize, prng: *std.rand.DefaultPrng) !u32 {
     return @intCast(top_k_indices[k - 1]);
 }
 
-fn generateText(allocator: std.mem.Allocator, rsf: *RSF, proj: *const Projection, mgt: *MGT, prompt_tokens: []const u32, max_len: usize, config: *const Config) ![]u8 {
+fn generateText(allocator: std.mem.Allocator, rsf: *RSF, proj: *const Projection, mgt: *MGT, embed: *LearnedEmbedding, prompt_tokens: []const u32, max_len: usize, config: *const Config) ![]u8 {
     const dim = config.embedding_dim;
     if (dim == 0) return error.InvalidDimension;
     const tensor_dim = dim * 2;
-
-    var input = try Tensor.init(allocator, &.{ 1, tensor_dim });
-    defer input.deinit();
+    const oftb = OFTBMixer.init(dim);
 
     var generated = std.ArrayList(u32).init(allocator);
     defer generated.deinit();
@@ -1631,13 +1695,16 @@ fn generateText(allocator: std.mem.Allocator, rsf: *RSF, proj: *const Projection
     while (step < max_len) : (step += 1) {
         const context_start = if (generated.items.len > dim) generated.items.len - dim else 0;
         const context = generated.items[context_start..];
-        try createEmbeddingInPlace(&input, context, mgt.vocabSize(), dim);
+        var input = try embed.forward(allocator, context, tensor_dim);
+        defer input.deinit();
+        oftb.forwardInPlace(&input);
         try rsf.forward(&input);
+        nsirModulateInPlace(input.data, MainConfig.NSIR_MODULATION_FACTOR);
 
         proj.forward(&input, logits);
 
         const next_token = try sampleTopK(logits, config.top_k, &prng);
-        if (next_token == 0) break; 
+        if (next_token == 0) break;
 
         try generated.append(next_token);
     }
@@ -1664,6 +1731,12 @@ fn runInteractiveREPL(allocator: std.mem.Allocator, mgt: *MGT, ssi: *SSI, ranker
     };
     defer rsf.deinit();
 
+    var embed = LearnedEmbedding.init(allocator, vocab_size, dim, MainConfig.PRNG_SEED_EMBEDDING) catch |err| {
+        try stdout.print("Failed to initialize LearnedEmbedding: {any}\n", .{err});
+        return err;
+    };
+    defer embed.deinit();
+
     var proj = Projection.init(allocator, dim * 2, vocab_size, MainConfig.PRNG_SEED_FORWARD) catch |err| {
         try stdout.print("Failed to initialize projection: {any}\n", .{err});
         return err;
@@ -1674,6 +1747,8 @@ fn runInteractiveREPL(allocator: std.mem.Allocator, mgt: *MGT, ssi: *SSI, ranker
     defer allocator.free(rsf_path);
     const proj_path = try std.fmt.allocPrint(allocator, "{s}/projection.bin", .{config.models_dir});
     defer allocator.free(proj_path);
+    const emb_path = try std.fmt.allocPrint(allocator, "{s}/embedding.bin", .{config.models_dir});
+    defer allocator.free(emb_path);
 
     var model_loaded = false;
     if (loadRSFWeights(&rsf, rsf_path)) {
@@ -1681,6 +1756,10 @@ fn runInteractiveREPL(allocator: std.mem.Allocator, mgt: *MGT, ssi: *SSI, ranker
             if (mgt.vocabSize() != loaded_proj.vocab_size) return error.VocabMismatch;
             proj.deinit();
             proj = loaded_proj;
+            if (LearnedEmbedding.load(allocator, emb_path)) |loaded_emb| {
+                embed.deinit();
+                embed = loaded_emb;
+            } else |_| {}
             model_loaded = true;
             try stdout.writeAll("Trained model loaded. Using generative mode.\n");
         } else |_| {
@@ -1796,7 +1875,7 @@ fn runInteractiveREPL(allocator: std.mem.Allocator, mgt: *MGT, ssi: *SSI, ranker
         }
 
         const max_gen_len = @min(config.sequence_length, dim);
-        const response = generateText(allocator, &rsf, &proj, mgt, query_tokens.items, max_gen_len, config) catch |err| {
+        const response = generateText(allocator, &rsf, &proj, mgt, &embed, query_tokens.items, max_gen_len, config) catch |err| {
             try stdout.print("Generation error: {any}\n", .{err});
             continue;
         };

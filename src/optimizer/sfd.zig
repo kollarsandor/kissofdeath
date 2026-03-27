@@ -356,14 +356,14 @@ pub const Tensor = struct {
 
     pub fn save(self: *const Tensor, writer: anytype) !void {
         try writer.writeInt(u32, 0x54464453, .little);
-        try writer.writeInt(u8, @intFromEnum(self.dtype), .Little);
-        try writer.writeInt(u8, tensorFlagsToBits(self.flags), .Little);
-        try writer.writeInt(u64, @intCast(self.shape.dims.len), .Little);
+        try writer.writeInt(u8, @intFromEnum(self.dtype), .little);
+        try writer.writeInt(u8, tensorFlagsToBits(self.flags), .little);
+        try writer.writeInt(u64, @intCast(self.shape.dims.len), .little);
         for (self.shape.dims) |dim| {
-            try writer.writeInt(u64, @intCast(dim), .Little);
+            try writer.writeInt(u64, @intCast(dim), .little);
         }
         for (self.data) |val| {
-            try writer.writeInt(u32, @as(u32, @bitCast(val)), .Little);
+            try writer.writeInt(u32, @as(u32, @bitCast(val)), .little);
         }
     }
 
@@ -1950,14 +1950,14 @@ pub const SFD = struct {
         var writer = buffered.writer();
 
         try writer.writeInt(u32, 0x53464431, .little);
-        try writer.writeInt(u32, @as(u32, @bitCast(self.beta1)), .Little);
-        try writer.writeInt(u32, @as(u32, @bitCast(self.beta2)), .Little);
-        try writer.writeInt(u32, @as(u32, @bitCast(self.eps)), .Little);
-        try writer.writeInt(u32, @as(u32, @bitCast(self.clip_threshold)), .Little);
-        try writer.writeInt(u32, @as(u32, @bitCast(self.fisher_max)), .Little);
-        try writer.writeInt(u64, @intCast(self.warmup_steps), .Little);
-        try writer.writeInt(u64, @intCast(self.param_size), .Little);
-        try writer.writeInt(u64, @intCast(self.step_count), .Little);
+        try writer.writeInt(u32, @as(u32, @bitCast(self.beta1)), .little);
+        try writer.writeInt(u32, @as(u32, @bitCast(self.beta2)), .little);
+        try writer.writeInt(u32, @as(u32, @bitCast(self.eps)), .little);
+        try writer.writeInt(u32, @as(u32, @bitCast(self.clip_threshold)), .little);
+        try writer.writeInt(u32, @as(u32, @bitCast(self.fisher_max)), .little);
+        try writer.writeInt(u64, @intCast(self.warmup_steps), .little);
+        try writer.writeInt(u64, @intCast(self.param_size), .little);
+        try writer.writeInt(u64, @intCast(self.step_count), .little);
         try self.fisher_diag.save(writer);
         try self.momentum_buffer.save(writer);
         try self.velocity_buffer.save(writer);

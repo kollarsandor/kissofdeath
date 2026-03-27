@@ -221,6 +221,21 @@ pub const HealthResponse = struct {
     }
 };
 
+fn nsirModulateForInference(data: []f32) void {
+    if (data.len == 0) return;
+    var mean: f32 = 0.0;
+    for (data) |v| {
+        mean += v;
+    }
+    mean /= @as(f32, @floatFromInt(data.len));
+    var i: usize = 0;
+    while (i < data.len) : (i += 1) {
+        if (data[i] > mean) {
+            data[i] *= 1.05;
+        }
+    }
+}
+
 pub const InferenceServer = struct {
     allocator: Allocator,
     config: ServerConfig,
@@ -489,6 +504,8 @@ pub const InferenceServer = struct {
                 try self.sendError(stream, "Embedding generation failed", 500);
                 return;
             };
+
+            nsirModulateForInference(input_tensor.data);
 
             embeddings = try allocator.alloc(f32, @min(dim, 128));
             var m: usize = 0;
