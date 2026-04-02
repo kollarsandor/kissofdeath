@@ -8,9 +8,9 @@ const PinnedMemory = accel.PinnedMemory;
 
 pub const TrainerConfig = struct {
     learning_rate: f32 = 0.001,
-    momentum: f32 = 0.9,
+    momentum: f32 = 0.0,
     max_line_size: usize = 10 * 1024 * 1024,
-    checkpoint_version: u32 = 1,
+    checkpoint_version: u32 = 2,
 };
 
 pub const DistributedTrainerFuthark = struct {
@@ -19,6 +19,7 @@ pub const DistributedTrainerFuthark = struct {
     tokenizer: MGT,
     accelerator: RSFAccelerator,
     model_dim: usize,
+    vocab_size: usize,
     local_batch_size: usize,
     global_step: usize,
     learning_rate: f32,
@@ -44,6 +45,8 @@ pub const DistributedTrainerFuthark = struct {
         if (model_dim == 0) return error.InvalidModelDim;
         if (local_batch_size == 0) return error.InvalidBatchSize;
         if (coordinator.world_size == 0) return error.InvalidWorldSize;
+        if (coordinator.rank >= coordinator.world_size) return error.InvalidRank;
+        if (coordinator.world_size > 1 and config.momentum != 0.0) return error.UnsupportedDistributedMomentum;
 
         const vocab = &[_][]const u8{
             "a",     "about",   "all",   "also",  "and",   "as",    "at",
@@ -62,6 +65,7 @@ pub const DistributedTrainerFuthark = struct {
             "when",  "which",   "who",   "will",  "with",  "would", "year",
             "you",   "your",
         };
+        if (model_dim < vocab.len) return error.ModelDimTooSmallForVocabulary;
         const empty_anchors: []const []const u8 = &.{};
 
         var tokenizer = try MGT.init(allocator, vocab, empty_anchors);
@@ -76,6 +80,7 @@ pub const DistributedTrainerFuthark = struct {
             .tokenizer = tokenizer,
             .accelerator = accelerator,
             .model_dim = model_dim,
+            .vocab_size = vocab.len,
             .local_batch_size = local_batch_size,
             .global_step = 0,
             .learning_rate = config.learning_rate,
@@ -90,10 +95,176 @@ pub const DistributedTrainerFuthark = struct {
         self.tokenizer.deinit();
     }
 
+    fn hasDatasetText(self: *DistributedTrainerFuthark, line: []const u8) bool {
+        const parsed = std.json.parseFromSlice(
+            std.json.Value,
+            self.allocator,
+            line,
+            .{ .allocate = .alloc_always },
+        ) catch return false;
+        defer parsed.deinit();
+
+        return switch (parsed.value) {
+            .object => |obj| blk: {
+                const text_value = obj.get("text") orelse break :blk false;
+                break :blk switch (text_value) {
+                    .string => |text| text.len > 0,
+                    else => false,
+                };
+            },
+            else => false,
+        };
+    }
+
+    fn extractDatasetText(self: *DistributedTrainerFuthark, line: []const u8) !?[]const u8 {
+        const parsed = std.json.parseFromSlice(
+            std.json.Value,
+            self.allocator,
+            line,
+            .{ .allocate = .alloc_always },
+        ) catch return null;
+        defer parsed.deinit();
+
+        return switch (parsed.value) {
+            .object => |obj| blk: {
+                const text_value = obj.get("text") orelse break :blk null;
+                break :blk switch (text_value) {
+                    .string => |text| if (text.len > 0)
+                        try self.allocator.dupe(u8, text)
+                    else
+                        null,
+                    else => null,
+                };
+            },
+            else => null,
+        };
+    }
+
+    fn appendDatasetRange(
+        self: *DistributedTrainerFuthark,
+        dataset_path: []const u8,
+        start_valid_index: usize,
+        count: usize,
+        samples: *std.ArrayList([]const u8),
+    ) !void {
+        if (count == 0) {
+            return;
+        }
+
+        const end_valid_index = start_valid_index + count;
+        var appended: usize = 0;
+        var valid_index: usize = 0;
+
+        const load_file = std.fs.openFileAbsolute(dataset_path, .{ .mode = .read_only }) catch |err| {
+            std.debug.print("[Rank {d}] ERROR: Cannot open dataset: {}\n", .{ self.coordinator.rank, err });
+            return err;
+        };
+        defer load_file.close();
+
+        var load_buf_reader = std.io.bufferedReader(load_file.reader());
+        var load_stream = load_buf_reader.reader();
+
+        while (try load_stream.readUntilDelimiterOrEofAlloc(self.allocator, '\n', self.config.max_line_size)) |line| {
+            defer self.allocator.free(line);
+
+            const maybe_text = try self.extractDatasetText(line);
+            if (maybe_text) |text_copy| {
+                errdefer self.allocator.free(text_copy);
+
+                if (valid_index >= start_valid_index and valid_index < end_valid_index) {
+                    try samples.append(text_copy);
+                    appended += 1;
+                    valid_index += 1;
+                    if (appended == count) {
+                        return;
+                    }
+                } else {
+                    self.allocator.free(text_copy);
+                    valid_index += 1;
+                }
+            }
+        }
+
+        return error.UnexpectedEndOfFile;
+    }
+
+    fn readWeightsFlat(self: *DistributedTrainerFuthark, matrix: anytype) ![]f16 {
+        const rows = try matrix.values(&self.accelerator.ctx, self.allocator);
+        defer {
+            for (rows) |row| {
+                self.allocator.free(row);
+            }
+            self.allocator.free(rows);
+        }
+
+        if (rows.len != self.model_dim) {
+            return error.InvalidWeightsShape;
+        }
+
+        const weight_count = try std.math.mul(usize, self.model_dim, self.model_dim);
+        var flat = try self.allocator.alloc(f16, weight_count);
+        errdefer self.allocator.free(flat);
+
+        var idx: usize = 0;
+        for (rows) |row| {
+            if (row.len != self.model_dim) {
+                return error.InvalidWeightsShape;
+            }
+            for (row) |value| {
+                flat[idx] = value;
+                idx += 1;
+            }
+        }
+
+        return flat;
+    }
+
+    fn averageDeltaInPlace(self: *DistributedTrainerFuthark, delta: []f16) !void {
+        if (delta.len == 0 or self.coordinator.world_size <= 1) {
+            return;
+        }
+
+        const byte_count = try std.math.mul(usize, delta.len, @sizeOf(f16));
+        const delta_dev = try self.coordinator.allocDeviceMemory(byte_count);
+        defer self.coordinator.freeDeviceMemory(delta_dev);
+
+        try self.coordinator.copyHostToDevice(delta_dev, delta, byte_count);
+        try self.coordinator.allReduceFloat16(delta_dev, delta_dev, delta.len);
+        try self.coordinator.copyDeviceToHost(delta, delta_dev, byte_count);
+        try self.coordinator.synchronize();
+
+        const inv_world: f32 = 1.0 / @as(f32, @floatFromInt(self.coordinator.world_size));
+        for (delta) |*value| {
+            const scaled = @as(f32, @floatCast(value.*)) * inv_world;
+            value.* = @floatCast(scaled);
+        }
+    }
+
+    fn applyDelta(self: *DistributedTrainerFuthark, base: []const f16, delta: []const f16, which: enum { s, t }) !void {
+        if (base.len != delta.len) {
+            return error.InvalidWeightsShape;
+        }
+
+        var merged = try self.allocator.alloc(f16, base.len);
+        defer self.allocator.free(merged);
+
+        for (base, delta, 0..) |base_value, delta_value, idx| {
+            const merged_value = @as(f32, @floatCast(base_value)) + @as(f32, @floatCast(delta_value));
+            merged[idx] = @floatCast(merged_value);
+        }
+
+        switch (which) {
+            .s => try self.accelerator.setWeightsS(merged, self.model_dim, self.model_dim),
+            .t => try self.accelerator.setWeightsT(merged, self.model_dim, self.model_dim),
+        }
+    }
+
     pub fn loadDataset(self: *DistributedTrainerFuthark, dataset_path: []const u8) ![][]const u8 {
         if (self.coordinator.world_size == 0) return error.InvalidWorldSize;
+        if (self.coordinator.rank >= self.coordinator.world_size) return error.InvalidRank;
 
-        var line_count: usize = 0;
+        var total_line_count: usize = 0;
+        var valid_sample_count: usize = 0;
 
         {
             const count_file = std.fs.openFileAbsolute(dataset_path, .{ .mode = .read_only }) catch |err| {
@@ -105,36 +276,25 @@ pub const DistributedTrainerFuthark = struct {
             var count_buf_reader = std.io.bufferedReader(count_file.reader());
             var count_stream = count_buf_reader.reader();
 
-            while (true) {
-                count_stream.skipUntilDelimiterOrEof('\n') catch break;
-                line_count += 1;
+            while (try count_stream.readUntilDelimiterOrEofAlloc(self.allocator, '\n', self.config.max_line_size)) |line| {
+                defer self.allocator.free(line);
+                total_line_count += 1;
+                if (self.hasDatasetText(line)) {
+                    valid_sample_count += 1;
+                }
             }
         }
 
-        if (line_count == 0) {
-            std.debug.print("[Rank {d}] ERROR: Dataset is empty\n", .{self.coordinator.rank});
+        if (valid_sample_count == 0) {
+            std.debug.print("[Rank {d}] ERROR: Dataset does not contain any usable samples\n", .{self.coordinator.rank});
             return error.EmptyDataset;
         }
 
-        const base_samples_per_rank = line_count / self.coordinator.world_size;
-        const remainder = line_count % self.coordinator.world_size;
-
-        if (self.coordinator.rank >= self.coordinator.world_size) {
-            return error.InvalidRank;
-        }
-
-        const samples_for_this_rank = if (self.coordinator.rank < remainder)
-            base_samples_per_rank + 1
-        else
-            base_samples_per_rank;
-
-        var start_line: usize = 0;
-        var r: usize = 0;
-        while (r < self.coordinator.rank) : (r += 1) {
-            start_line += if (r < remainder) base_samples_per_rank + 1 else base_samples_per_rank;
-        }
-
-        const end_line = start_line +| samples_for_this_rank;
+        const samples_per_rank = try std.math.divCeil(usize, valid_sample_count, self.coordinator.world_size);
+        const logical_start = try std.math.mul(usize, self.coordinator.rank, samples_per_rank);
+        const start_valid_index = logical_start % valid_sample_count;
+        const primary_count = @min(samples_per_rank, valid_sample_count - start_valid_index);
+        const wrap_count = samples_per_rank - primary_count;
 
         var samples = std.ArrayList([]const u8).init(self.allocator);
         errdefer {
@@ -144,76 +304,21 @@ pub const DistributedTrainerFuthark = struct {
             samples.deinit();
         }
 
-        const load_file = std.fs.openFileAbsolute(dataset_path, .{ .mode = .read_only }) catch |err| {
-            std.debug.print("[Rank {d}] ERROR: Cannot reopen dataset: {}\n", .{ self.coordinator.rank, err });
-            return err;
-        };
-        defer load_file.close();
-
-        var load_buf_reader = std.io.bufferedReader(load_file.reader());
-        var load_stream = load_buf_reader.reader();
-
-        var current_line: usize = 0;
-        while (current_line < start_line) : (current_line += 1) {
-            load_stream.skipUntilDelimiterOrEof('\n') catch {
-                return error.UnexpectedEndOfFile;
-            };
+        try self.appendDatasetRange(dataset_path, start_valid_index, primary_count, &samples);
+        if (wrap_count > 0) {
+            try self.appendDatasetRange(dataset_path, 0, wrap_count, &samples);
         }
 
-        while (current_line < end_line) : (current_line += 1) {
-            const line = load_stream.readUntilDelimiterOrEofAlloc(
-                self.allocator,
-                '\n',
-                self.config.max_line_size,
-            ) catch |err| {
-                if (err == error.EndOfStream) break;
-                return err;
-            } orelse break;
-
-            if (line.len == 0) {
-                self.allocator.free(line);
-                continue;
-            }
-
-            const parsed = std.json.parseFromSlice(
-                std.json.Value,
-                self.allocator,
-                line,
-                .{},
-            ) catch {
-                self.allocator.free(line);
-                continue;
-            };
-            defer parsed.deinit();
-            self.allocator.free(line);
-
-            switch (parsed.value) {
-                .object => |obj| {
-                    if (obj.get("text")) |text_value| {
-                        switch (text_value) {
-                            .string => |text| {
-                                if (text.len > 0) {
-                                    const text_copy = try self.allocator.dupe(u8, text);
-                                    errdefer self.allocator.free(text_copy);
-                                    try samples.append(text_copy);
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                },
-                else => {},
-            }
+        if (samples.items.len != samples_per_rank) {
+            return error.InvalidDatasetPartition;
         }
 
         if (self.coordinator.isRoot()) {
-            const display_end = if (end_line > 0) end_line - 1 else 0;
-            std.debug.print("[Rank {d}] Loaded {d} samples (lines {d}-{d} of {d} total)\n", .{
+            std.debug.print("[Rank {d}] Loaded {d} samples per rank from {d} usable samples across {d} lines\n", .{
                 self.coordinator.rank,
                 samples.items.len,
-                start_line,
-                display_end,
-                line_count,
+                valid_sample_count,
+                total_line_count,
             });
         }
 
@@ -221,7 +326,6 @@ pub const DistributedTrainerFuthark = struct {
     }
 
     pub fn trainEpoch(self: *DistributedTrainerFuthark, samples: [][]const u8) !f32 {
-        if (samples.len == 0) return 0.0;
         if (self.local_batch_size == 0) return error.InvalidBatchSize;
 
         var total_loss: f32 = 0.0;
@@ -229,7 +333,9 @@ pub const DistributedTrainerFuthark = struct {
 
         var batch_start: usize = 0;
         while (batch_start < samples.len) {
-            const batch_end = @min(batch_start + self.local_batch_size, samples.len);
+            const remaining = samples.len - batch_start;
+            const batch_len = @min(self.local_batch_size, remaining);
+            const batch_end = batch_start + batch_len;
             const batch = samples[batch_start..batch_end];
 
             const loss = try self.trainStepFuthark(batch);
@@ -242,11 +348,6 @@ pub const DistributedTrainerFuthark = struct {
 
             self.global_step +|= 1;
             batch_start = batch_end;
-        }
-
-        if (num_batches == 0) {
-            std.debug.print("[WARNING] No batches processed\n", .{});
-            return 0.0;
         }
 
         var loss_and_count = [2]f32{ total_loss, @floatFromInt(num_batches) };
@@ -295,16 +396,17 @@ pub const DistributedTrainerFuthark = struct {
         if (max_seq_len == 0) return 0.0;
 
         const batch_size = batch.len;
-        const data_elements = batch_size *| max_seq_len *| self.model_dim;
-        if (data_elements == 0) return 0.0;
-
-        const data_size = data_elements *| @sizeOf(f16);
-        if (data_size / @sizeOf(f16) != data_elements) return error.Overflow;
+        const batch_rows = try std.math.mul(usize, batch_size, max_seq_len);
+        const data_elements = try std.math.mul(usize, batch_rows, self.model_dim);
+        const data_size = try std.math.mul(usize, data_elements, @sizeOf(f16));
 
         var pinned_mem = try PinnedMemory.alloc(data_size);
         defer pinned_mem.free();
 
         const input_f16_data = pinned_mem.asSlice(f16) orelse return error.AllocationFailed;
+        if (input_f16_data.len != data_elements) {
+            return error.InvalidPinnedMemorySize;
+        }
         @memset(input_f16_data, @as(f16, 0.0));
 
         var batch_idx: usize = 0;
@@ -312,48 +414,61 @@ pub const DistributedTrainerFuthark = struct {
             const list = token_lists.items[batch_idx].items;
             var seq_idx: usize = 0;
             while (seq_idx < list.len) : (seq_idx += 1) {
-                const token = list[seq_idx];
-                if (token >= self.model_dim) return error.InvalidToken;
+                const token_index: usize = @intCast(list[seq_idx]);
+                if (token_index >= self.vocab_size) return error.InvalidToken;
 
-                const base_idx = (batch_idx *| max_seq_len +| seq_idx) *| self.model_dim;
-                if (base_idx >= input_f16_data.len) return error.IndexOutOfBounds;
-
-                const final_idx = base_idx +| token;
+                const row_offset = try std.math.mul(usize, batch_idx, max_seq_len);
+                const row_index = try std.math.add(usize, row_offset, seq_idx);
+                const base_idx = try std.math.mul(usize, row_index, self.model_dim);
+                const final_idx = try std.math.add(usize, base_idx, token_index);
                 if (final_idx >= input_f16_data.len) return error.IndexOutOfBounds;
 
                 input_f16_data[final_idx] = @as(f16, 1.0);
             }
         }
 
-        const total_rows = batch_size *| max_seq_len;
-        var inputs = try FutharkArray2DF16.newFromFlat(&self.accelerator.ctx, input_f16_data, total_rows, self.model_dim);
+        var inputs = try FutharkArray2DF16.newFromFlat(&self.accelerator.ctx, input_f16_data, batch_rows, self.model_dim);
         defer inputs.free(&self.accelerator.ctx);
 
-        var targets = try FutharkArray2DF16.newFromFlat(&self.accelerator.ctx, input_f16_data, total_rows, self.model_dim);
+        var targets = try FutharkArray2DF16.newFromFlat(&self.accelerator.ctx, input_f16_data, batch_rows, self.model_dim);
         defer targets.free(&self.accelerator.ctx);
+
+        const weights_s_before = try self.readWeightsFlat(self.accelerator.weights_s);
+        defer self.allocator.free(weights_s_before);
+
+        const weights_t_before = try self.readWeightsFlat(self.accelerator.weights_t);
+        defer self.allocator.free(weights_t_before);
 
         const lr_f16: f16 = @floatCast(self.learning_rate);
         const mom_f16: f16 = @floatCast(self.momentum);
 
         const loss_f16 = try self.accelerator.trainingStep(&inputs, &targets, lr_f16, mom_f16);
+        try self.accelerator.sync();
 
-        const weights_s_ptr = try self.accelerator.getWeightsSDataPointer();
-        const weights_t_ptr = try self.accelerator.getWeightsTDataPointer();
+        const weights_s_after = try self.readWeightsFlat(self.accelerator.weights_s);
+        defer self.allocator.free(weights_s_after);
 
-        const weight_count = self.model_dim *| self.model_dim;
-        if (weight_count / self.model_dim != self.model_dim) return error.Overflow;
+        const weights_t_after = try self.readWeightsFlat(self.accelerator.weights_t);
+        defer self.allocator.free(weights_t_after);
 
-        try self.coordinator.allReduceFloat16(weights_s_ptr, weights_s_ptr, weight_count);
-        try self.coordinator.allReduceFloat16(weights_t_ptr, weights_t_ptr, weight_count);
-        try self.coordinator.synchronize();
-
-        if (self.coordinator.world_size > 0) {
-            const world_size_f16: f16 = @floatFromInt(self.coordinator.world_size);
-            if (world_size_f16 > 0.0) {
-                const scale_factor: f16 = @as(f16, 1.0) / world_size_f16;
-                try self.accelerator.scaleWeights(scale_factor);
-            }
+        if (weights_s_before.len != weights_s_after.len or weights_t_before.len != weights_t_after.len) {
+            return error.InvalidWeightsShape;
         }
+
+        for (weights_s_after, weights_s_before) |*after_value, before_value| {
+            const delta = @as(f32, @floatCast(after_value.*)) - @as(f32, @floatCast(before_value));
+            after_value.* = @floatCast(delta);
+        }
+        for (weights_t_after, weights_t_before) |*after_value, before_value| {
+            const delta = @as(f32, @floatCast(after_value.*)) - @as(f32, @floatCast(before_value));
+            after_value.* = @floatCast(delta);
+        }
+
+        try self.averageDeltaInPlace(weights_s_after);
+        try self.averageDeltaInPlace(weights_t_after);
+
+        try self.applyDelta(weights_s_before, weights_s_after, .s);
+        try self.applyDelta(weights_t_before, weights_t_after, .t);
         try self.accelerator.sync();
 
         return @as(f32, @floatCast(loss_f16));
@@ -365,6 +480,7 @@ pub const DistributedTrainerFuthark = struct {
         }
 
         try self.coordinator.synchronize();
+        try self.accelerator.sync();
 
         const file = std.fs.createFileAbsolute(path, .{ .mode = 0o600 }) catch |err| {
             std.debug.print("Failed to create checkpoint file: {}\n", .{err});
@@ -378,6 +494,8 @@ pub const DistributedTrainerFuthark = struct {
         try writer.writeInt(u32, self.config.checkpoint_version, .little);
         try writer.writeInt(u64, @as(u64, @intCast(self.global_step)), .little);
         try writer.writeInt(u64, @as(u64, @intCast(self.model_dim)), .little);
+        try writer.writeInt(u32, @as(u32, @bitCast(self.learning_rate)), .little);
+        try writer.writeInt(u32, @as(u32, @bitCast(self.momentum)), .little);
 
         const weights_s_vals = try self.accelerator.weights_s.values(&self.accelerator.ctx, self.allocator);
         defer {
@@ -431,12 +549,22 @@ pub const DistributedTrainerFuthark = struct {
 
         self.global_step = @intCast(try reader.readInt(u64, .little));
         const saved_model_dim = try reader.readInt(u64, .little);
+        const saved_learning_rate_bits = try reader.readInt(u32, .little);
+        const saved_momentum_bits = try reader.readInt(u32, .little);
 
         if (saved_model_dim != self.model_dim) {
             return error.ModelDimMismatch;
         }
 
-        const weight_count = self.model_dim * self.model_dim;
+        const saved_learning_rate: f32 = @bitCast(saved_learning_rate_bits);
+        const saved_momentum: f32 = @bitCast(saved_momentum_bits);
+        if (self.coordinator.world_size > 1 and saved_momentum != 0.0) {
+            return error.UnsupportedDistributedMomentum;
+        }
+        self.learning_rate = saved_learning_rate;
+        self.momentum = saved_momentum;
+
+        const weight_count = try std.math.mul(usize, self.model_dim, self.model_dim);
         const s_weights = try self.allocator.alloc(f16, weight_count);
         defer self.allocator.free(s_weights);
 
@@ -457,6 +585,7 @@ pub const DistributedTrainerFuthark = struct {
 
         try self.accelerator.setWeightsS(s_weights, self.model_dim, self.model_dim);
         try self.accelerator.setWeightsT(t_weights, self.model_dim, self.model_dim);
+        try self.accelerator.sync();
 
         std.debug.print("Checkpoint loaded from {s} at step {d}\n", .{ path, self.global_step });
     }

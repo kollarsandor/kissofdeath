@@ -2,6 +2,42 @@ const std = @import("std");
 const nccl = @import("nccl_bindings.zig");
 const Allocator = std.mem.Allocator;
 
+fn constOpaquePtrFrom(value: anytype) *const anyopaque {
+    const T = @TypeOf(value);
+    return switch (@typeInfo(T)) {
+        .pointer => |ptr_info| switch (ptr_info.size) {
+            .One, .Many, .C => @ptrCast(value),
+            .Slice => blk: {
+                std.debug.assert(value.len > 0);
+                break :blk @ptrCast(&value[0]);
+            },
+        },
+        else => @compileError("expected pointer or slice"),
+    };
+}
+
+fn opaquePtrFrom(value: anytype) *anyopaque {
+    const T = @TypeOf(value);
+    return switch (@typeInfo(T)) {
+        .pointer => |ptr_info| switch (ptr_info.size) {
+            .One, .Many, .C => blk: {
+                if (ptr_info.is_const) {
+                    @compileError("expected mutable pointer");
+                }
+                break :blk @ptrCast(value);
+            },
+            .Slice => blk: {
+                if (ptr_info.is_const) {
+                    @compileError("expected mutable slice");
+                }
+                std.debug.assert(value.len > 0);
+                break :blk @ptrCast(&value[0]);
+            },
+        },
+        else => @compileError("expected pointer or slice"),
+    };
+}
+
 pub const GPUCoordinator = struct {
     allocator: Allocator,
     world_size: usize,
@@ -11,18 +47,24 @@ pub const GPUCoordinator = struct {
     cuda_stream: *anyopaque,
 
     pub fn init(allocator: Allocator, world_size: usize, rank: usize, nccl_id: nccl.ncclUniqueId) !GPUCoordinator {
+        if (world_size == 0) {
+            return error.InvalidWorldSize;
+        }
+        if (rank >= world_size) {
+            return error.InvalidRank;
+        }
+
         var device_count: c_int = 0;
         var cuda_err = nccl.cudaGetDeviceCount(&device_count);
         if (cuda_err != .cudaSuccess) {
             return error.CudaGetDeviceCountFailed;
         }
-
-        if (device_count < world_size) {
-            std.debug.print("Error: Only {d} GPUs available, need {d}\n", .{device_count, world_size});
+        if (device_count <= 0) {
             return error.InsufficientGPUs;
         }
 
-        const device_id: i32 = @intCast(rank);
+        const local_device_count: usize = @intCast(device_count);
+        const device_id: i32 = @intCast(rank % local_device_count);
         cuda_err = nccl.cudaSetDevice(device_id);
         if (cuda_err != .cudaSuccess) {
             return error.CudaSetDeviceFailed;
@@ -35,6 +77,7 @@ pub const GPUCoordinator = struct {
             std.debug.print("NCCL Error: {s}\n", .{err_str});
             return error.NCCLCommInitFailed;
         }
+        errdefer _ = nccl.ncclCommDestroy(nccl_comm);
 
         var cuda_stream: *anyopaque = undefined;
         cuda_err = nccl.cudaStreamCreate(&cuda_stream);
@@ -53,18 +96,23 @@ pub const GPUCoordinator = struct {
     }
 
     pub fn deinit(self: *GPUCoordinator) void {
+        _ = nccl.cudaStreamSynchronize(self.cuda_stream);
         _ = nccl.cudaStreamDestroy(self.cuda_stream);
         _ = nccl.ncclCommDestroy(self.nccl_comm);
     }
 
     pub fn allocDeviceMemory(self: *GPUCoordinator, size: usize) !*anyopaque {
         _ = self;
+        if (size == 0) {
+            return error.InvalidAllocationSize;
+        }
+
         var dev_ptr: ?*anyopaque = null;
         const err = nccl.cudaMalloc(&dev_ptr, size);
         if (err != .cudaSuccess) {
             return error.CudaMallocFailed;
         }
-        return dev_ptr.?;
+        return dev_ptr orelse return error.CudaMallocFailed;
     }
 
     pub fn freeDeviceMemory(self: *GPUCoordinator, ptr: *anyopaque) void {
@@ -72,17 +120,33 @@ pub const GPUCoordinator = struct {
         _ = nccl.cudaFree(ptr);
     }
 
-    pub fn copyHostToDevice(self: *GPUCoordinator, dst: *anyopaque, src: *const anyopaque, size: usize) !void {
-        _ = self;
-        const err = nccl.cudaMemcpy(dst, src, size, nccl.cudaMemcpyKind.cudaMemcpyHostToDevice);
+    pub fn copyHostToDevice(self: *GPUCoordinator, dst: anytype, src: anytype, size: usize) !void {
+        if (size == 0) {
+            return;
+        }
+
+        const dst_ptr = opaquePtrFrom(dst);
+        const src_ptr = constOpaquePtrFrom(src);
+        const err = if (@hasDecl(nccl, "cudaMemcpyAsync"))
+            nccl.cudaMemcpyAsync(dst_ptr, src_ptr, size, nccl.cudaMemcpyKind.cudaMemcpyHostToDevice, self.cuda_stream)
+        else
+            nccl.cudaMemcpy(dst_ptr, src_ptr, size, nccl.cudaMemcpyKind.cudaMemcpyHostToDevice);
         if (err != .cudaSuccess) {
             return error.CudaMemcpyFailed;
         }
     }
 
-    pub fn copyDeviceToHost(self: *GPUCoordinator, dst: *anyopaque, src: *const anyopaque, size: usize) !void {
-        _ = self;
-        const err = nccl.cudaMemcpy(dst, src, size, nccl.cudaMemcpyKind.cudaMemcpyDeviceToHost);
+    pub fn copyDeviceToHost(self: *GPUCoordinator, dst: anytype, src: anytype, size: usize) !void {
+        if (size == 0) {
+            return;
+        }
+
+        const dst_ptr = opaquePtrFrom(dst);
+        const src_ptr = constOpaquePtrFrom(src);
+        const err = if (@hasDecl(nccl, "cudaMemcpyAsync"))
+            nccl.cudaMemcpyAsync(dst_ptr, src_ptr, size, nccl.cudaMemcpyKind.cudaMemcpyDeviceToHost, self.cuda_stream)
+        else
+            nccl.cudaMemcpy(dst_ptr, src_ptr, size, nccl.cudaMemcpyKind.cudaMemcpyDeviceToHost);
         if (err != .cudaSuccess) {
             return error.CudaMemcpyFailed;
         }
@@ -96,7 +160,7 @@ pub const GPUCoordinator = struct {
             .ncclFloat32,
             .ncclSum,
             self.nccl_comm,
-            self.cuda_stream
+            self.cuda_stream,
         );
         if (err != .ncclSuccess) {
             const err_str = nccl.ncclGetErrorString(err);
@@ -113,7 +177,7 @@ pub const GPUCoordinator = struct {
             .ncclFloat16,
             .ncclSum,
             self.nccl_comm,
-            self.cuda_stream
+            self.cuda_stream,
         );
         if (err != .ncclSuccess) {
             const err_str = nccl.ncclGetErrorString(err);
@@ -123,6 +187,10 @@ pub const GPUCoordinator = struct {
     }
 
     pub fn broadcastFloat32(self: *GPUCoordinator, buf: *anyopaque, count: usize, root: usize) !void {
+        if (root >= self.world_size) {
+            return error.InvalidRootRank;
+        }
+
         const err = nccl.ncclBroadcast(
             buf,
             buf,
@@ -130,7 +198,7 @@ pub const GPUCoordinator = struct {
             .ncclFloat32,
             @intCast(root),
             self.nccl_comm,
-            self.cuda_stream
+            self.cuda_stream,
         );
         if (err != .ncclSuccess) {
             return error.NCCLBroadcastFailed;
