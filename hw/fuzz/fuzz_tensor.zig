@@ -21,7 +21,7 @@ pub fn main() !void {
     std.debug.print("Max dimension size: {d}\n", .{config.max_dim_size});
     std.debug.print("Max rank: {d}\n\n", .{config.max_rank});
 
-    var prng = std.rand.DefaultPrng.init(config.seed);
+    var prng = std.Random.DefaultPrng.init(config.seed);
     const rand = prng.random();
 
     var successful_ops: usize = 0;

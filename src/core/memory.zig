@@ -1564,7 +1564,7 @@ pub fn sortMemory(data: []u8) void {
 }
 
 pub fn shuffleMemory(data: []u8, seed: u64) void {
-    var prng = std.rand.DefaultPrng.init(seed);
+    var prng = std.Random.DefaultPrng.init(seed);
     prng.random().shuffle(u8, data);
 }
 

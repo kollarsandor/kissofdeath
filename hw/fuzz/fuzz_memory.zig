@@ -18,7 +18,7 @@ pub fn main() !void {
     std.debug.print("Iterations: {d}\n", .{config.iterations});
     std.debug.print("Max allocation size: {d} bytes\n\n", .{config.max_alloc_size});
 
-    var prng = std.rand.DefaultPrng.init(config.seed);
+    var prng = std.Random.DefaultPrng.init(config.seed);
     const rand = prng.random();
 
     var allocations = std.ArrayList([]u8).init(allocator);

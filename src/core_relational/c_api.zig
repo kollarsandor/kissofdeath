@@ -175,7 +175,7 @@ pub const EntangledStochasticSymmetryOptimizer = struct {
     reheat_threshold: f64,
     reheat_factor: f64,
     adaptive_cooling: bool,
-    prng: std.rand.DefaultPrng,
+    prng: std.Random.DefaultPrng,
     allocator: Allocator,
     statistics: OptimizationStatistics,
 
@@ -203,7 +203,7 @@ pub const EntangledStochasticSymmetryOptimizer = struct {
             .reheat_threshold = DEFAULT_REHEAT_THRESHOLD,
             .reheat_factor = DEFAULT_REHEAT_FACTOR,
             .adaptive_cooling = true,
-            .prng = std.rand.DefaultPrng.init(seed),
+            .prng = std.Random.DefaultPrng.init(seed),
             .allocator = allocator,
             .statistics = OptimizationStatistics.init(),
         };

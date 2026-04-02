@@ -713,7 +713,7 @@ pub const EntangledStochasticSymmetryOptimizer = struct {
     allocator: Allocator,
     statistics: OptimizationStatistics,
     objective_fn: ?ObjectiveFunction,
-    prng: std.rand.DefaultPrng,
+    prng: std.Random.DefaultPrng,
     energy_history: ArrayList(f64),
     temperature_history: ArrayList(f64),
     reheat_factor: f64,
@@ -753,7 +753,7 @@ pub const EntangledStochasticSymmetryOptimizer = struct {
             .allocator = allocator,
             .statistics = OptimizationStatistics.init(),
             .objective_fn = null,
-            .prng = std.rand.DefaultPrng.init(seed),
+            .prng = std.Random.DefaultPrng.init(seed),
             .energy_history = ArrayList(f64).init(allocator),
             .temperature_history = ArrayList(f64).init(allocator),
             .reheat_factor = DEFAULT_REHEAT_FACTOR,
@@ -766,7 +766,7 @@ pub const EntangledStochasticSymmetryOptimizer = struct {
 
     pub fn initWithSeed(allocator: Allocator, initial_temp: f64, cooling_rate: f64, max_iterations: usize, seed: u64) Self {
         var optimizer = Self.init(allocator, initial_temp, cooling_rate, max_iterations);
-        optimizer.prng = std.rand.DefaultPrng.init(seed);
+        optimizer.prng = std.Random.DefaultPrng.init(seed);
         return optimizer;
     }
 

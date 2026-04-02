@@ -371,7 +371,7 @@ pub const SelfSimilarRelationalGraph = struct {
     entanglements: EntMap,
     quantum_register: StringHashMap(Qubit),
     topology_hash: [65]u8,
-    rng: std.rand.DefaultPrng,
+    rng: std.Random.DefaultPrng,
 
     pub fn init(allocator: Allocator) !SelfSimilarRelationalGraph {
         const ts = std.time.nanoTimestamp();
@@ -383,7 +383,7 @@ pub const SelfSimilarRelationalGraph = struct {
             .entanglements = EntMap.init(allocator),
             .quantum_register = StringHashMap(Qubit).init(allocator),
             .topology_hash = [_]u8{0} ** 65,
-            .rng = std.rand.DefaultPrng.init(seed),
+            .rng = std.Random.DefaultPrng.init(seed),
         };
         try g.updateTopologyHash();
         return g;

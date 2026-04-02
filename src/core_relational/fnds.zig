@@ -445,7 +445,7 @@ pub const FractalLevel = struct {
 
         stack.append(self) catch return 1;
 
-        while (stack.popOrNull()) |curr| {
+        while (stack.pop()) |curr| {
             if (curr.level > max_depth) max_depth = curr.level;
             for (curr.child_levels.items) |child| {
                 stack.append(child) catch break;
@@ -463,7 +463,7 @@ pub const FractalLevel = struct {
             stack.append(child) catch break;
         }
 
-        while (stack.popOrNull()) |curr| {
+        while (stack.pop()) |curr| {
             total += curr.node_count;
             for (curr.child_levels.items) |child| {
                 stack.append(child) catch break;
@@ -588,7 +588,7 @@ pub const FractalTree = struct {
             stack.append(child) catch return null;
         }
 
-        while (stack.popOrNull()) |curr| {
+        while (stack.pop()) |curr| {
             if (curr.getNode(node_id)) |node| return node;
             for (curr.child_levels.items) |child| {
                 stack.append(child) catch return null;
@@ -614,7 +614,7 @@ pub const FractalTree = struct {
             stack.append(child) catch return null;
         }
 
-        while (stack.popOrNull()) |curr| {
+        while (stack.pop()) |curr| {
             if (curr.getNodeConst(node_id)) |node| return node;
             for (curr.child_levels.items) |child| {
                 stack.append(child) catch return null;
@@ -752,7 +752,7 @@ pub const FractalTree = struct {
             try stack.append(child);
         }
 
-        while (stack.popOrNull()) |curr| {
+        while (stack.pop()) |curr| {
             var iter = curr.nodes.iterator();
             while (iter.next()) |entry| {
                 const cloned = try entry.value_ptr.clone(self.allocator);

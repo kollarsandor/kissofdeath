@@ -736,7 +736,7 @@ pub const SSI = struct {
         var stack = std.ArrayList(struct { node: *const Node, d: usize }).init(self.allocator);
         defer stack.deinit();
         stack.append(.{ .node = root, .d = 0 }) catch return .{ .nodes = nodes, .leaves = leaves, .depth = depth };
-        while (stack.popOrNull()) |entry| {
+        while (stack.pop()) |entry| {
             nodes += 1;
             if (entry.node.is_leaf) {
                 leaves += 1;

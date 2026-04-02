@@ -15,7 +15,7 @@ pub const LearnedEmbedding = struct {
         var g = try Tensor.init(allocator, &.{ v_size, d });
         errdefer g.deinit();
         @memset(g.data, 0.0);
-        var prng = std.rand.DefaultPrng.init(seed);
+        var prng = std.Random.DefaultPrng.init(seed);
         const random = prng.random();
         var i: usize = 0;
         while (i < w.data.len) : (i += 1) {

@@ -154,7 +154,7 @@ pub const Tensor = struct {
     }
 
     pub fn fillRandomNormal(self: *Tensor, mean: f32, std_dev: f32) !void {
-        var prng = std.rand.DefaultPrng.init(nextSeed());
+        var prng = std.Random.DefaultPrng.init(nextSeed());
         const random = prng.random();
 
         for (self.data) |*v| {
@@ -166,7 +166,7 @@ pub const Tensor = struct {
     }
 
     pub fn fillRademacher(self: *Tensor) !void {
-        var prng = std.rand.DefaultPrng.init(nextSeed());
+        var prng = std.Random.DefaultPrng.init(nextSeed());
         const random = prng.random();
 
         for (self.data) |*v| {
@@ -1510,7 +1510,7 @@ pub const BayesianOptimizer = struct {
     }
 
     fn sampleRandom(self: *BayesianOptimizer) !HyperparamConfig {
-        var prng = std.rand.DefaultPrng.init(nextSeed());
+        var prng = std.Random.DefaultPrng.init(nextSeed());
         const random = prng.random();
 
         return HyperparamConfig{

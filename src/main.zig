@@ -1608,7 +1608,7 @@ fn loadRSFWeights(rsf: *RSF, path: []const u8) !void {
     }
 }
 
-fn sampleTopK(logits: []f32, k_param: usize, prng: *std.rand.DefaultPrng) !u32 {
+fn sampleTopK(logits: []f32, k_param: usize, prng: *std.Random.DefaultPrng) !u32 {
     if (logits.len == 0 or k_param == 0) return 0;
     var k = k_param;
     if (k >= logits.len) k = logits.len;
@@ -1689,7 +1689,7 @@ fn generateText(allocator: std.mem.Allocator, rsf: *RSF, proj: *const Projection
     const logits = try allocator.alloc(f32, proj.vocab_size);
     defer allocator.free(logits);
 
-    var prng = std.rand.DefaultPrng.init(MainConfig.PRNG_SEED_SYNTHETIC);
+    var prng = std.Random.DefaultPrng.init(MainConfig.PRNG_SEED_SYNTHETIC);
 
     var step: usize = 0;
     while (step < max_len) : (step += 1) {

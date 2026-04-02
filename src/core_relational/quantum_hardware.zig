@@ -1685,7 +1685,7 @@ pub const IBMQuantumClient = struct {
     }
 
     pub fn authenticate(self: *Self) !void {
-        var prng = std.rand.DefaultPrng.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
+        var prng = std.Random.DefaultPrng.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
         const random = prng.random();
 
         var token_buf: [QuantumConfig.TOKEN_LENGTH]u8 = undefined;
@@ -1747,7 +1747,7 @@ pub const IBMQuantumClient = struct {
             try self.authenticate();
         }
 
-        var prng = std.rand.DefaultPrng.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
+        var prng = std.Random.DefaultPrng.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
         const random = prng.random();
 
         var job_id_buf: [QuantumConfig.JOB_ID_LENGTH]u8 = undefined;
@@ -1827,9 +1827,9 @@ pub const IBMQuantumClient = struct {
         const dim = @as(usize, 1) << @intCast(@min(n, QuantumConfig.MAX_QUBITS_SIMULATION));
 
         var prng = if (options.seed) |s|
-            std.rand.DefaultPrng.init(s)
+            std.Random.DefaultPrng.init(s)
         else
-            std.rand.DefaultPrng.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
+            std.Random.DefaultPrng.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
         const random = prng.random();
 
         const probabilities = try result.allocator.alloc(f64, dim);
@@ -1901,9 +1901,9 @@ pub const IBMQuantumClient = struct {
         const fidelity = backend.estimateFidelity(circuit.getDepth(), circuit.countTwoQubitGates());
 
         var prng = if (options.seed) |s|
-            std.rand.DefaultPrng.init(s)
+            std.Random.DefaultPrng.init(s)
         else
-            std.rand.DefaultPrng.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
+            std.Random.DefaultPrng.init(@as(u64, @truncate(@as(u128, @bitCast(std.time.nanoTimestamp())))));
         const random = prng.random();
 
         const n = circuit.num_qubits;

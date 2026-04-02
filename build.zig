@@ -24,42 +24,6 @@ pub fn build(b: *std.Build) void {
     main_exe.root_module.addOptions("build_options", build_options);
     b.installArtifact(main_exe);
 
-    const distributed_exe = b.addExecutable(.{
-        .name = "jaide-distributed",
-        .root_source_file = b.path("src/main_distributed.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    distributed_exe.linkLibC();
-    distributed_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
-    distributed_exe.addIncludePath(futhark_include);
-    distributed_exe.root_module.addOptions("build_options", build_options);
-    b.installArtifact(distributed_exe);
-
-    const distributed_futhark_exe = b.addExecutable(.{
-        .name = "jaide-distributed-futhark",
-        .root_source_file = b.path("src/main_distributed_futhark.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    distributed_futhark_exe.linkLibC();
-    distributed_futhark_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
-    distributed_futhark_exe.addIncludePath(futhark_include);
-    distributed_futhark_exe.root_module.addOptions("build_options", build_options);
-    b.installArtifact(distributed_futhark_exe);
-
-    const gpu_exe = b.addExecutable(.{
-        .name = "jaide-gpu",
-        .root_source_file = b.path("src/main_gpu.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    gpu_exe.linkLibC();
-    gpu_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
-    gpu_exe.addIncludePath(futhark_include);
-    gpu_exe.root_module.addOptions("build_options", build_options);
-    b.installArtifact(gpu_exe);
-
     const inference_server_exe = b.addExecutable(.{
         .name = "jaide-inference-server",
         .root_source_file = b.path("src/inference_server_main.zig"),
@@ -72,19 +36,57 @@ pub fn build(b: *std.Build) void {
     inference_server_exe.root_module.addOptions("build_options", build_options);
     b.installArtifact(inference_server_exe);
 
+    if (gpu_enabled) {
+        const distributed_exe = b.addExecutable(.{
+            .name = "jaide-distributed",
+            .root_source_file = b.path("src/main_distributed.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        distributed_exe.linkLibC();
+        distributed_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
+        distributed_exe.addIncludePath(futhark_include);
+        distributed_exe.root_module.addOptions("build_options", build_options);
+        b.installArtifact(distributed_exe);
+
+        const run_distributed_cmd = b.addRunArtifact(distributed_exe);
+        run_distributed_cmd.step.dependOn(&distributed_exe.step);
+        const run_distributed_step = b.step("run-distributed", "Run the distributed trainer");
+        run_distributed_step.dependOn(&run_distributed_cmd.step);
+
+        const distributed_futhark_exe = b.addExecutable(.{
+            .name = "jaide-distributed-futhark",
+            .root_source_file = b.path("src/main_distributed_futhark.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        distributed_futhark_exe.linkLibC();
+        distributed_futhark_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
+        distributed_futhark_exe.addIncludePath(futhark_include);
+        distributed_futhark_exe.root_module.addOptions("build_options", build_options);
+        b.installArtifact(distributed_futhark_exe);
+
+        const gpu_exe = b.addExecutable(.{
+            .name = "jaide-gpu",
+            .root_source_file = b.path("src/main_gpu.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        gpu_exe.linkLibC();
+        gpu_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
+        gpu_exe.addIncludePath(futhark_include);
+        gpu_exe.root_module.addOptions("build_options", build_options);
+        b.installArtifact(gpu_exe);
+    }
+
     const run_cmd = b.addRunArtifact(main_exe);
-    run_cmd.step.dependOn(b.getInstallStep());
+    run_cmd.step.dependOn(&main_exe.step);
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
 
     const run_step = b.step("run", "Run the JAIDE main executable");
     run_step.dependOn(&run_cmd.step);
-
-    const run_distributed_cmd = b.addRunArtifact(distributed_exe);
-    run_distributed_cmd.step.dependOn(b.getInstallStep());
-    const run_distributed_step = b.step("run-distributed", "Run the distributed trainer");
-    run_distributed_step.dependOn(&run_distributed_cmd.step);
 
     const main_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),

@@ -20,7 +20,7 @@ pub fn main() !void {
     std.debug.print("Max tokens per document: {d}\n", .{config.max_tokens});
     std.debug.print("Max query tokens: {d}\n\n", .{config.max_query_tokens});
 
-    var prng = std.rand.DefaultPrng.init(config.seed);
+    var prng = std.Random.DefaultPrng.init(config.seed);
     const rand = prng.random();
 
     var successful_inserts: usize = 0;

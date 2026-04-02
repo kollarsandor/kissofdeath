@@ -177,8 +177,7 @@ pub const Tensor = struct {
     }
 
     pub fn release(self: *Tensor) void {
-        if (@atomicRmw(usize, &self.data.refcount, .Sub, 1, .release) == 1) {
-            @fence(.acquire);
+        if (@atomicRmw(usize, &self.data.refcount, .Sub, 1, .acq_rel) == 1) {
             const data_slice = self.data.ptr[0..self.data.len];
             const alloc = self.data.allocator;
             alloc.free(data_slice);
