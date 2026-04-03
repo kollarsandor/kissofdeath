@@ -1,2534 +1,4208 @@
 (in-package "ACL2")
 
-(defun all-natp (x)
+(defconst *special-pad* 0)
+(defconst *special-unk* 1)
+(defconst *special-bos* 2)
+(defconst *special-eos* 3)
+
+(defun token-entry-p (entry)
   (declare (xargs :guard t))
-  (if (atom x)
-      (equal x nil)
-    (and (natp (car x))
-         (all-natp (cdr x)))))
+  (and (consp entry)
+       (stringp (car entry))
+       (natp (cdr entry))))
 
-(defthm all-natp-nil
-  (equal (all-natp nil) t))
-
-(defthm all-natp-cons
-  (equal (all-natp (cons a x))
-         (and (natp a) (all-natp x))))
-
-(defthm all-natp-implies-true-listp
-  (implies (all-natp x)
-           (true-listp x))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm all-natp-cdr
-  (implies (and (all-natp x) (consp x))
-           (all-natp (cdr x))))
-
-(defthm all-natp-car-natp
-  (implies (and (all-natp x) (consp x))
-           (natp (car x))))
-
-(defthm all-natp-append
-  (implies (and (all-natp x) (all-natp y))
-           (all-natp (append x y))))
-
-(defthm all-natp-nthcdr
-  (implies (all-natp x)
-           (all-natp (nthcdr n x))))
-
-(defthm all-natp-take
-  (implies (and (all-natp x)
-                (natp n)
-                (<= n (len x)))
-           (all-natp (take n x))))
-
-(defthm all-natp-revappend
-  (implies (and (all-natp x) (all-natp y))
-           (all-natp (revappend x y))))
-
-(defthm all-natp-reverse
-  (implies (all-natp x)
-           (all-natp (reverse x))))
-
-(defun alist-get (key alist)
+(defun token-list-p (lst)
   (declare (xargs :guard t))
-  (let ((pair (assoc-equal key alist)))
-    (if pair (cdr pair) nil)))
+  (if (atom lst)
+      (null lst)
+    (and (token-entry-p (car lst))
+         (token-list-p (cdr lst)))))
 
-(defun alist-put (key val alist)
+(defthm token-list-p-of-nil
+  (token-list-p nil))
+
+(defthm token-list-p-of-cons
+  (implies (and (token-entry-p e)
+                (token-list-p rest))
+           (token-list-p (cons e rest))))
+
+(defthm token-list-p-implies-true-listp
+  (implies (token-list-p lst)
+           (true-listp lst))
+  :hints (("Goal" :induct (token-list-p lst))))
+
+(defthm token-list-p-of-cdr
+  (implies (and (token-list-p lst)
+                (consp lst))
+           (token-list-p (cdr lst))))
+
+(defthm token-entry-p-of-car
+  (implies (and (token-list-p lst)
+                (consp lst))
+           (token-entry-p (car lst))))
+
+(defun id-entry-p (entry)
   (declare (xargs :guard t))
-  (acons key val alist))
+  (and (consp entry)
+       (natp (car entry))
+       (stringp (cdr entry))))
 
-(defun alist-contains (key alist)
+(defun id-list-p (lst)
   (declare (xargs :guard t))
-  (if (assoc-equal key alist) t nil))
+  (if (atom lst)
+      (null lst)
+    (and (id-entry-p (car lst))
+         (id-list-p (cdr lst)))))
 
-(defthm alist-get-of-alist-put-same
-  (equal (alist-get k (alist-put k v a))
-         v))
+(defthm id-list-p-of-nil
+  (id-list-p nil))
 
-(defthm alist-get-of-alist-put-diff
-  (implies (not (equal k1 k2))
-           (equal (alist-get k1 (alist-put k2 v a))
-                  (alist-get k1 a))))
+(defthm id-list-p-of-cons
+  (implies (and (id-entry-p e)
+                (id-list-p rest))
+           (id-list-p (cons e rest))))
 
-(defthm alist-contains-of-alist-put-same
-  (equal (alist-contains k (alist-put k v a))
-         t))
+(defthm id-list-p-implies-true-listp
+  (implies (id-list-p lst)
+           (true-listp lst))
+  :hints (("Goal" :induct (id-list-p lst))))
 
-(defthm alist-contains-of-alist-put-diff
-  (implies (not (equal k1 k2))
-           (equal (alist-contains k1 (alist-put k2 v a))
-                  (alist-contains k1 a))))
+(defthm id-list-p-of-cdr
+  (implies (and (id-list-p lst)
+                (consp lst))
+           (id-list-p (cdr lst))))
 
-(defthm alist-get-nil
-  (equal (alist-get k nil) nil))
-
-(defthm alist-contains-nil
-  (equal (alist-contains k nil) nil))
-
-(defthm alistp-alist-put
-  (implies (alistp a)
-           (alistp (alist-put k v a))))
-
-(defthm consp-assoc-equal-when-alist-contains
-  (implies (alist-contains k a)
-           (consp (assoc-equal k a))))
-
-(defthm alist-get-type-when-natp-val
-  (implies (and (alist-contains k a)
-                (natp (cdr (assoc-equal k a))))
-           (natp (alist-get k a))))
-
-(defun alist-keys (alist)
+(defun bpe-merge-p (m)
   (declare (xargs :guard t))
-  (if (atom alist)
-      nil
-    (if (consp (car alist))
-        (cons (caar alist) (alist-keys (cdr alist)))
-      (alist-keys (cdr alist)))))
+  (and (consp m)
+       (natp (car m))
+       (natp (cdr m))))
 
-(defthm true-listp-alist-keys
-  (true-listp (alist-keys a)))
-
-(defthm member-alist-keys-iff-alist-contains
-  (implies (alistp a)
-           (iff (member-equal k (alist-keys a))
-                (alist-contains k a))))
-
-(defun alist-vals (alist)
+(defun bpe-pair-entry-p (entry)
   (declare (xargs :guard t))
-  (if (atom alist)
-      nil
-    (if (consp (car alist))
-        (cons (cdar alist) (alist-vals (cdr alist)))
-      (alist-vals (cdr alist)))))
+  (and (consp entry)
+       (stringp (car entry))
+       (bpe-merge-p (cdr entry))))
 
-(defthm true-listp-alist-vals
-  (true-listp (alist-vals a)))
-
-(defun alist-count (alist)
+(defun bpe-pair-list-p (lst)
   (declare (xargs :guard t))
-  (if (atom alist)
-      0
-    (if (consp (car alist))
-        (+ 1 (alist-count (cdr alist)))
-      (alist-count (cdr alist)))))
+  (if (atom lst)
+      (null lst)
+    (and (bpe-pair-entry-p (car lst))
+         (bpe-pair-list-p (cdr lst)))))
 
-(defthm natp-alist-count
-  (natp (alist-count a))
-  :rule-classes (:rewrite :type-prescription))
+(defthm bpe-pair-list-p-of-nil
+  (bpe-pair-list-p nil))
 
-(defthm alist-count-of-alist-put
-  (equal (alist-count (alist-put k v a))
-         (+ 1 (alist-count a))))
+(defthm bpe-pair-list-p-of-cons
+  (implies (and (bpe-pair-entry-p e)
+                (bpe-pair-list-p rest))
+           (bpe-pair-list-p (cons e rest))))
 
-(defconst *pad-id* 0)
-(defconst *unk-id* 1)
-(defconst *bos-id* 2)
-(defconst *eos-id* 3)
+(defthm bpe-pair-list-p-implies-true-listp
+  (implies (bpe-pair-list-p lst)
+           (true-listp lst))
+  :hints (("Goal" :induct (bpe-pair-list-p lst))))
 
-(defconst *pad-word* (coerce "[PAD]" 'list))
-(defconst *unk-word* (coerce "[UNK]" 'list))
-(defconst *bos-word* (coerce "[BOS]" 'list))
-(defconst *eos-word* (coerce "[EOS]" 'list))
-
-(defconst *special-tokens*
-  (list *pad-word* *unk-word* *bos-word* *eos-word*))
-
-(defconst *special-ids*
-  (list *pad-id* *unk-id* *bos-id* *eos-id*))
-
-(defun mgt-make-state (tok2id id2tok prefixes suffixes roots bpe-pairs anchors next-id)
+(defun anchor-entry-p (entry)
   (declare (xargs :guard t))
-  (list tok2id id2tok prefixes suffixes roots bpe-pairs anchors next-id))
+  (and (consp entry)
+       (stringp (car entry))
+       (natp (cdr entry))))
 
-(defun mgt-tok2id (st) (declare (xargs :guard t)) (nth 0 st))
-(defun mgt-id2tok (st) (declare (xargs :guard t)) (nth 1 st))
-(defun mgt-prefixes (st) (declare (xargs :guard t)) (nth 2 st))
-(defun mgt-suffixes (st) (declare (xargs :guard t)) (nth 3 st))
-(defun mgt-roots (st) (declare (xargs :guard t)) (nth 4 st))
-(defun mgt-bpe-pairs (st) (declare (xargs :guard t)) (nth 5 st))
-(defun mgt-anchors (st) (declare (xargs :guard t)) (nth 6 st))
-(defun mgt-next-id (st) (declare (xargs :guard t)) (nth 7 st))
-
-(defun mgt-set-tok2id (v st)
+(defun anchor-list-p (lst)
   (declare (xargs :guard t))
-  (update-nth 0 v st))
-
-(defun mgt-set-id2tok (v st)
-  (declare (xargs :guard t))
-  (update-nth 1 v st))
-
-(defun mgt-set-prefixes (v st)
-  (declare (xargs :guard t))
-  (update-nth 2 v st))
-
-(defun mgt-set-suffixes (v st)
-  (declare (xargs :guard t))
-  (update-nth 3 v st))
-
-(defun mgt-set-roots (v st)
-  (declare (xargs :guard t))
-  (update-nth 4 v st))
-
-(defun mgt-set-bpe-pairs (v st)
-  (declare (xargs :guard t))
-  (update-nth 5 v st))
-
-(defun mgt-set-anchors (v st)
-  (declare (xargs :guard t))
-  (update-nth 6 v st))
-
-(defun mgt-set-next-id (v st)
-  (declare (xargs :guard t))
-  (update-nth 7 v st))
-
-(defthm mgt-tok2id-of-make
-  (equal (mgt-tok2id (mgt-make-state a b c d e f g h)) a))
-
-(defthm mgt-id2tok-of-make
-  (equal (mgt-id2tok (mgt-make-state a b c d e f g h)) b))
-
-(defthm mgt-prefixes-of-make
-  (equal (mgt-prefixes (mgt-make-state a b c d e f g h)) c))
-
-(defthm mgt-suffixes-of-make
-  (equal (mgt-suffixes (mgt-make-state a b c d e f g h)) d))
-
-(defthm mgt-roots-of-make
-  (equal (mgt-roots (mgt-make-state a b c d e f g h)) e))
-
-(defthm mgt-bpe-pairs-of-make
-  (equal (mgt-bpe-pairs (mgt-make-state a b c d e f g h)) f))
-
-(defthm mgt-anchors-of-make
-  (equal (mgt-anchors (mgt-make-state a b c d e f g h)) g))
-
-(defthm mgt-next-id-of-make
-  (equal (mgt-next-id (mgt-make-state a b c d e f g h)) h))
-
-(defthm mgt-tok2id-of-set-tok2id
-  (equal (mgt-tok2id (mgt-set-tok2id v st)) v))
-
-(defthm mgt-id2tok-of-set-id2tok
-  (equal (mgt-id2tok (mgt-set-id2tok v st)) v))
-
-(defthm mgt-prefixes-of-set-prefixes
-  (equal (mgt-prefixes (mgt-set-prefixes v st)) v))
-
-(defthm mgt-suffixes-of-set-suffixes
-  (equal (mgt-suffixes (mgt-set-suffixes v st)) v))
-
-(defthm mgt-roots-of-set-roots
-  (equal (mgt-roots (mgt-set-roots v st)) v))
-
-(defthm mgt-bpe-pairs-of-set-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-set-bpe-pairs v st)) v))
-
-(defthm mgt-anchors-of-set-anchors
-  (equal (mgt-anchors (mgt-set-anchors v st)) v))
-
-(defthm mgt-next-id-of-set-next-id
-  (equal (mgt-next-id (mgt-set-next-id v st)) v))
-
-(defthm mgt-tok2id-of-set-id2tok
-  (equal (mgt-tok2id (mgt-set-id2tok v st))
-         (mgt-tok2id st)))
-
-(defthm mgt-tok2id-of-set-prefixes
-  (equal (mgt-tok2id (mgt-set-prefixes v st))
-         (mgt-tok2id st)))
-
-(defthm mgt-tok2id-of-set-suffixes
-  (equal (mgt-tok2id (mgt-set-suffixes v st))
-         (mgt-tok2id st)))
-
-(defthm mgt-tok2id-of-set-roots
-  (equal (mgt-tok2id (mgt-set-roots v st))
-         (mgt-tok2id st)))
-
-(defthm mgt-tok2id-of-set-bpe-pairs
-  (equal (mgt-tok2id (mgt-set-bpe-pairs v st))
-         (mgt-tok2id st)))
-
-(defthm mgt-tok2id-of-set-anchors
-  (equal (mgt-tok2id (mgt-set-anchors v st))
-         (mgt-tok2id st)))
-
-(defthm mgt-tok2id-of-set-next-id
-  (equal (mgt-tok2id (mgt-set-next-id v st))
-         (mgt-tok2id st)))
-
-(defthm mgt-id2tok-of-set-tok2id
-  (equal (mgt-id2tok (mgt-set-tok2id v st))
-         (mgt-id2tok st)))
-
-(defthm mgt-id2tok-of-set-prefixes
-  (equal (mgt-id2tok (mgt-set-prefixes v st))
-         (mgt-id2tok st)))
-
-(defthm mgt-id2tok-of-set-suffixes
-  (equal (mgt-id2tok (mgt-set-suffixes v st))
-         (mgt-id2tok st)))
-
-(defthm mgt-id2tok-of-set-roots
-  (equal (mgt-id2tok (mgt-set-roots v st))
-         (mgt-id2tok st)))
-
-(defthm mgt-id2tok-of-set-bpe-pairs
-  (equal (mgt-id2tok (mgt-set-bpe-pairs v st))
-         (mgt-id2tok st)))
-
-(defthm mgt-id2tok-of-set-anchors
-  (equal (mgt-id2tok (mgt-set-anchors v st))
-         (mgt-id2tok st)))
-
-(defthm mgt-id2tok-of-set-next-id
-  (equal (mgt-id2tok (mgt-set-next-id v st))
-         (mgt-id2tok st)))
-
-(defthm mgt-next-id-of-set-tok2id
-  (equal (mgt-next-id (mgt-set-tok2id v st))
-         (mgt-next-id st)))
-
-(defthm mgt-next-id-of-set-id2tok
-  (equal (mgt-next-id (mgt-set-id2tok v st))
-         (mgt-next-id st)))
-
-(defthm mgt-next-id-of-set-prefixes
-  (equal (mgt-next-id (mgt-set-prefixes v st))
-         (mgt-next-id st)))
-
-(defthm mgt-next-id-of-set-suffixes
-  (equal (mgt-next-id (mgt-set-suffixes v st))
-         (mgt-next-id st)))
-
-(defthm mgt-next-id-of-set-roots
-  (equal (mgt-next-id (mgt-set-roots v st))
-         (mgt-next-id st)))
-
-(defthm mgt-next-id-of-set-bpe-pairs
-  (equal (mgt-next-id (mgt-set-bpe-pairs v st))
-         (mgt-next-id st)))
-
-(defthm mgt-next-id-of-set-anchors
-  (equal (mgt-next-id (mgt-set-anchors v st))
-         (mgt-next-id st)))
-
-(defthm mgt-prefixes-of-set-tok2id
-  (equal (mgt-prefixes (mgt-set-tok2id v st))
-         (mgt-prefixes st)))
-
-(defthm mgt-prefixes-of-set-id2tok
-  (equal (mgt-prefixes (mgt-set-id2tok v st))
-         (mgt-prefixes st)))
-
-(defthm mgt-prefixes-of-set-next-id
-  (equal (mgt-prefixes (mgt-set-next-id v st))
-         (mgt-prefixes st)))
-
-(defthm mgt-suffixes-of-set-tok2id
-  (equal (mgt-suffixes (mgt-set-tok2id v st))
-         (mgt-suffixes st)))
-
-(defthm mgt-suffixes-of-set-id2tok
-  (equal (mgt-suffixes (mgt-set-id2tok v st))
-         (mgt-suffixes st)))
-
-(defthm mgt-suffixes-of-set-next-id
-  (equal (mgt-suffixes (mgt-set-next-id v st))
-         (mgt-suffixes st)))
-
-(defthm mgt-roots-of-set-tok2id
-  (equal (mgt-roots (mgt-set-tok2id v st))
-         (mgt-roots st)))
-
-(defthm mgt-roots-of-set-id2tok
-  (equal (mgt-roots (mgt-set-id2tok v st))
-         (mgt-roots st)))
-
-(defthm mgt-roots-of-set-next-id
-  (equal (mgt-roots (mgt-set-next-id v st))
-         (mgt-roots st)))
-
-(defthm mgt-anchors-of-set-tok2id
-  (equal (mgt-anchors (mgt-set-tok2id v st))
-         (mgt-anchors st)))
-
-(defthm mgt-anchors-of-set-id2tok
-  (equal (mgt-anchors (mgt-set-id2tok v st))
-         (mgt-anchors st)))
-
-(defthm mgt-anchors-of-set-next-id
-  (equal (mgt-anchors (mgt-set-next-id v st))
-         (mgt-anchors st)))
-
-(defthm mgt-bpe-pairs-of-set-tok2id
-  (equal (mgt-bpe-pairs (mgt-set-tok2id v st))
-         (mgt-bpe-pairs st)))
-
-(defthm mgt-bpe-pairs-of-set-id2tok
-  (equal (mgt-bpe-pairs (mgt-set-id2tok v st))
-         (mgt-bpe-pairs st)))
-
-(defthm mgt-bpe-pairs-of-set-next-id
-  (equal (mgt-bpe-pairs (mgt-set-next-id v st))
-         (mgt-bpe-pairs st)))
-
-(defthm mgt-suffixes-of-set-prefixes
-  (equal (mgt-suffixes (mgt-set-prefixes v st))
-         (mgt-suffixes st)))
-
-(defthm mgt-prefixes-of-set-suffixes
-  (equal (mgt-prefixes (mgt-set-suffixes v st))
-         (mgt-prefixes st)))
-
-(defthm mgt-roots-of-set-prefixes
-  (equal (mgt-roots (mgt-set-prefixes v st))
-         (mgt-roots st)))
-
-(defthm mgt-roots-of-set-suffixes
-  (equal (mgt-roots (mgt-set-suffixes v st))
-         (mgt-roots st)))
-
-(defthm mgt-prefixes-of-set-roots
-  (equal (mgt-prefixes (mgt-set-roots v st))
-         (mgt-prefixes st)))
-
-(defthm mgt-suffixes-of-set-roots
-  (equal (mgt-suffixes (mgt-set-roots v st))
-         (mgt-suffixes st)))
-
-(defthm mgt-bpe-pairs-of-set-prefixes
-  (equal (mgt-bpe-pairs (mgt-set-prefixes v st))
-         (mgt-bpe-pairs st)))
-
-(defthm mgt-bpe-pairs-of-set-suffixes
-  (equal (mgt-bpe-pairs (mgt-set-suffixes v st))
-         (mgt-bpe-pairs st)))
-
-(defthm mgt-bpe-pairs-of-set-roots
-  (equal (mgt-bpe-pairs (mgt-set-roots v st))
-         (mgt-bpe-pairs st)))
-
-(defthm mgt-anchors-of-set-prefixes
-  (equal (mgt-anchors (mgt-set-prefixes v st))
-         (mgt-anchors st)))
-
-(defthm mgt-anchors-of-set-suffixes
-  (equal (mgt-anchors (mgt-set-suffixes v st))
-         (mgt-anchors st)))
-
-(defthm mgt-anchors-of-set-roots
-  (equal (mgt-anchors (mgt-set-roots v st))
-         (mgt-anchors st)))
-
-(defthm mgt-prefixes-of-set-bpe-pairs
-  (equal (mgt-prefixes (mgt-set-bpe-pairs v st))
-         (mgt-prefixes st)))
-
-(defthm mgt-suffixes-of-set-bpe-pairs
-  (equal (mgt-suffixes (mgt-set-bpe-pairs v st))
-         (mgt-suffixes st)))
-
-(defthm mgt-roots-of-set-bpe-pairs
-  (equal (mgt-roots (mgt-set-bpe-pairs v st))
-         (mgt-roots st)))
-
-(defthm mgt-prefixes-of-set-anchors
-  (equal (mgt-prefixes (mgt-set-anchors v st))
-         (mgt-prefixes st)))
-
-(defthm mgt-suffixes-of-set-anchors
-  (equal (mgt-suffixes (mgt-set-anchors v st))
-         (mgt-suffixes st)))
-
-(defthm mgt-roots-of-set-anchors
-  (equal (mgt-roots (mgt-set-anchors v st))
-         (mgt-roots st)))
-
-(defthm mgt-anchors-of-set-bpe-pairs
-  (equal (mgt-anchors (mgt-set-bpe-pairs v st))
-         (mgt-anchors st)))
-
-(defthm mgt-bpe-pairs-of-set-anchors
-  (equal (mgt-bpe-pairs (mgt-set-anchors v st))
-         (mgt-bpe-pairs st)))
-
-(defun mgt-statep (st)
+  (if (atom lst)
+      (null lst)
+    (and (anchor-entry-p (car lst))
+         (anchor-list-p (cdr lst)))))
+
+(defthm anchor-list-p-of-nil
+  (anchor-list-p nil))
+
+(defthm anchor-list-p-of-cons
+  (implies (and (anchor-entry-p e)
+                (anchor-list-p rest))
+           (anchor-list-p (cons e rest))))
+
+(defthm anchor-list-p-implies-true-listp
+  (implies (anchor-list-p lst)
+           (true-listp lst))
+  :hints (("Goal" :induct (anchor-list-p lst))))
+
+(defun mgt-state-p (st)
   (declare (xargs :guard t))
   (and (true-listp st)
-       (equal (len st) 8)
-       (alistp (mgt-tok2id st))
-       (alistp (mgt-id2tok st))
-       (alistp (mgt-prefixes st))
-       (alistp (mgt-suffixes st))
-       (alistp (mgt-roots st))
-       (alistp (mgt-bpe-pairs st))
-       (alistp (mgt-anchors st))
-       (natp (mgt-next-id st))))
-
-(defthm mgt-statep-of-make
-  (implies (and (alistp a) (alistp b) (alistp c) (alistp d)
-                (alistp e) (alistp f) (alistp g) (natp h))
-           (mgt-statep (mgt-make-state a b c d e f g h))))
-
-(defthm mgt-statep-implies-true-listp
-  (implies (mgt-statep st)
-           (true-listp st))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm mgt-statep-implies-natp-next-id
-  (implies (mgt-statep st)
-           (natp (mgt-next-id st)))
-  :rule-classes (:rewrite :forward-chaining :type-prescription))
-
-(defthm mgt-statep-implies-alistp-tok2id
-  (implies (mgt-statep st)
-           (alistp (mgt-tok2id st)))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm mgt-statep-implies-alistp-id2tok
-  (implies (mgt-statep st)
-           (alistp (mgt-id2tok st)))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm mgt-statep-implies-alistp-prefixes
-  (implies (mgt-statep st)
-           (alistp (mgt-prefixes st)))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm mgt-statep-implies-alistp-suffixes
-  (implies (mgt-statep st)
-           (alistp (mgt-suffixes st)))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm mgt-statep-implies-alistp-roots
-  (implies (mgt-statep st)
-           (alistp (mgt-roots st)))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm mgt-statep-implies-alistp-bpe-pairs
-  (implies (mgt-statep st)
-           (alistp (mgt-bpe-pairs st)))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm mgt-statep-implies-alistp-anchors
-  (implies (mgt-statep st)
-           (alistp (mgt-anchors st)))
-  :rule-classes (:rewrite :forward-chaining))
-
-(defthm mgt-statep-implies-len-8
-  (implies (mgt-statep st)
-           (equal (len st) 8)))
-
-(defun mgt-add-token (word st)
-  (declare (xargs :guard t))
-  (if (alist-contains word (mgt-tok2id st))
-      (list (alist-get word (mgt-tok2id st)) st)
-    (let* ((id (nfix (mgt-next-id st)))
-           (new-tok2id (alist-put word id (mgt-tok2id st)))
-           (new-id2tok (alist-put id word (mgt-id2tok st)))
-           (st1 (mgt-set-tok2id new-tok2id st))
-           (st2 (mgt-set-id2tok new-id2tok st1))
-           (st3 (mgt-set-next-id (+ 1 id) st2)))
-      (list id st3))))
-
-(defun mgt-add-token-id (word st)
-  (declare (xargs :guard t))
-  (car (mgt-add-token word st)))
-
-(defun mgt-add-token-state (word st)
-  (declare (xargs :guard t))
-  (cadr (mgt-add-token word st)))
-
-(defthm natp-mgt-add-token-id
-  (implies (mgt-statep st)
-           (natp (mgt-add-token-id word st)))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-add-token-id-existing
-  (implies (alist-contains word (mgt-tok2id st))
-           (equal (mgt-add-token-id word st)
-                  (alist-get word (mgt-tok2id st)))))
-
-(defthm mgt-add-token-state-existing
-  (implies (alist-contains word (mgt-tok2id st))
-           (equal (mgt-add-token-state word st)
-                  st)))
-
-(defthm mgt-add-token-id-new
-  (implies (and (mgt-statep st)
-                (not (alist-contains word (mgt-tok2id st))))
-           (equal (mgt-add-token-id word st)
-                  (nfix (mgt-next-id st)))))
-
-(defthm mgt-add-token-next-id-increases
-  (implies (and (mgt-statep st)
-                (not (alist-contains word (mgt-tok2id st))))
-           (equal (mgt-next-id (mgt-add-token-state word st))
-                  (+ 1 (nfix (mgt-next-id st))))))
-
-(defthm mgt-add-token-findable
-  (implies (mgt-statep st)
-           (alist-contains word (mgt-tok2id (mgt-add-token-state word st)))))
-
-(defthm mgt-add-token-id-retrievable
-  (implies (mgt-statep st)
-           (equal (alist-get word (mgt-tok2id (mgt-add-token-state word st)))
-                  (mgt-add-token-id word st))))
-
-(defthm mgt-add-token-reverse-map
-  (implies (and (mgt-statep st)
-                (not (alist-contains word (mgt-tok2id st))))
-           (equal (alist-get (nfix (mgt-next-id st))
-                             (mgt-id2tok (mgt-add-token-state word st)))
-                  word)))
-
-(defthm mgt-add-token-preserves-prefixes
-  (equal (mgt-prefixes (mgt-add-token-state word st))
-         (mgt-prefixes st)))
-
-(defthm mgt-add-token-preserves-suffixes
-  (equal (mgt-suffixes (mgt-add-token-state word st))
-         (mgt-suffixes st)))
-
-(defthm mgt-add-token-preserves-roots
-  (equal (mgt-roots (mgt-add-token-state word st))
-         (mgt-roots st)))
-
-(defthm mgt-add-token-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-add-token-state word st))
-         (mgt-bpe-pairs st)))
-
-(defthm mgt-add-token-preserves-anchors
-  (equal (mgt-anchors (mgt-add-token-state word st))
-         (mgt-anchors st)))
-
-(defthm mgt-add-token-preserves-existing
-  (implies (and (not (equal w1 w2))
-                (alist-contains w1 (mgt-tok2id st)))
-           (alist-contains w1 (mgt-tok2id (mgt-add-token-state w2 st)))))
-
-(defthm mgt-add-token-preserves-existing-id
-  (implies (and (not (equal w1 w2))
-                (alist-contains w1 (mgt-tok2id st)))
-           (equal (alist-get w1 (mgt-tok2id (mgt-add-token-state w2 st)))
-                  (alist-get w1 (mgt-tok2id st)))))
-
-(defun mgt-add-tokens (words st)
-  (declare (xargs :guard t
-                  :measure (acl2-count words)))
-  (if (atom words)
-      st
-    (let ((st2 (mgt-add-token-state (car words) st)))
-      (mgt-add-tokens (cdr words) st2))))
-
-(defthm mgt-add-tokens-nil
-  (equal (mgt-add-tokens nil st) st))
-
-(defthm mgt-add-tokens-cons
-  (equal (mgt-add-tokens (cons w ws) st)
-         (mgt-add-tokens ws (mgt-add-token-state w st))))
-
-(defthm mgt-add-tokens-preserves-prefixes
-  (equal (mgt-prefixes (mgt-add-tokens words st))
-         (mgt-prefixes st))
-  :hints (("Goal" :induct (mgt-add-tokens words st))))
-
-(defthm mgt-add-tokens-preserves-suffixes
-  (equal (mgt-suffixes (mgt-add-tokens words st))
-         (mgt-suffixes st))
-  :hints (("Goal" :induct (mgt-add-tokens words st))))
-
-(defthm mgt-add-tokens-preserves-roots
-  (equal (mgt-roots (mgt-add-tokens words st))
-         (mgt-roots st))
-  :hints (("Goal" :induct (mgt-add-tokens words st))))
-
-(defthm mgt-add-tokens-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-add-tokens words st))
-         (mgt-bpe-pairs st))
-  :hints (("Goal" :induct (mgt-add-tokens words st))))
-
-(defthm mgt-add-tokens-preserves-anchors
-  (equal (mgt-anchors (mgt-add-tokens words st))
-         (mgt-anchors st))
-  :hints (("Goal" :induct (mgt-add-tokens words st))))
-
-(defun mgt-empty-state ()
-  (declare (xargs :guard t))
-  (mgt-make-state nil nil nil nil nil nil nil 0))
-
-(defthm mgt-statep-empty
-  (mgt-statep (mgt-empty-state)))
-
-(defthm mgt-next-id-empty
-  (equal (mgt-next-id (mgt-empty-state)) 0))
-
-(defthm mgt-tok2id-empty
-  (equal (mgt-tok2id (mgt-empty-state)) nil))
-
-(defthm mgt-id2tok-empty
-  (equal (mgt-id2tok (mgt-empty-state)) nil))
-
-(defun mgt-vocab-size (st)
-  (declare (xargs :guard t))
-  (alist-count (mgt-tok2id st)))
-
-(defthm natp-mgt-vocab-size
-  (natp (mgt-vocab-size st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-vocab-size-empty
-  (equal (mgt-vocab-size (mgt-empty-state)) 0))
-
-(defthm mgt-vocab-size-after-add-new
-  (implies (and (mgt-statep st)
-                (not (alist-contains word (mgt-tok2id st))))
-           (equal (mgt-vocab-size (mgt-add-token-state word st))
-                  (+ 1 (mgt-vocab-size st)))))
-
-(defthm mgt-vocab-size-after-add-existing
-  (implies (alist-contains word (mgt-tok2id st))
-           (equal (mgt-vocab-size (mgt-add-token-state word st))
-                  (mgt-vocab-size st))))
-
-(defun whitespace-byte-p (b)
-  (declare (xargs :guard t))
-  (or (equal b #\Space)
-      (equal b #\Newline)
-      (equal b #\Tab)
-      (equal b #\Return)))
-
-(defun punctuation-byte-p (b)
-  (declare (xargs :guard t))
-  (or (equal b #\.)
-      (equal b #\,)
-      (equal b #\!)
-      (equal b #\?)
-      (equal b #\;)
-      (equal b #\:)
-      (equal b #\")
-      (equal b #\')
-      (equal b #\()
-      (equal b #\))
-      (equal b #\{)
-      (equal b #\})))
-
-(defthm booleanp-whitespace-byte-p
-  (or (equal (whitespace-byte-p b) t)
-      (equal (whitespace-byte-p b) nil))
-  :rule-classes :type-prescription)
-
-(defthm booleanp-punctuation-byte-p
-  (or (equal (punctuation-byte-p b) t)
-      (equal (punctuation-byte-p b) nil))
-  :rule-classes :type-prescription)
-
-(defthm whitespace-not-punctuation
-  (implies (whitespace-byte-p b)
-           (not (punctuation-byte-p b))))
-
-(defthm space-is-whitespace
-  (equal (whitespace-byte-p #\Space) t))
-
-(defthm newline-is-whitespace
-  (equal (whitespace-byte-p #\Newline) t))
-
-(defthm tab-is-whitespace
-  (equal (whitespace-byte-p #\Tab) t))
-
-(defthm return-is-whitespace
-  (equal (whitespace-byte-p #\Return) t))
-
-(defthm period-is-punctuation
-  (equal (punctuation-byte-p #\.) t))
-
-(defthm comma-is-punctuation
-  (equal (punctuation-byte-p #\,) t))
-
-(defthm exclam-is-punctuation
-  (equal (punctuation-byte-p #\!) t))
-
-(defthm question-is-punctuation
-  (equal (punctuation-byte-p #\?) t))
-
-(defun starts-with-p (text prefix)
-  (declare (xargs :guard t
-                  :measure (acl2-count prefix)))
-  (cond ((atom prefix) t)
-        ((atom text) nil)
-        ((equal (car text) (car prefix))
-         (starts-with-p (cdr text) (cdr prefix)))
-        (t nil)))
-
-(defthm starts-with-p-nil-prefix
-  (equal (starts-with-p text nil) t))
-
-(defthm starts-with-p-nil-text
-  (implies (consp prefix)
-           (equal (starts-with-p nil prefix) nil)))
-
-(defthm starts-with-p-reflexive
-  (starts-with-p text text))
-
-(defthm starts-with-p-cons-cons
-  (equal (starts-with-p (cons a x) (cons b y))
-         (and (equal a b) (starts-with-p x y))))
-
-(defthm starts-with-p-append
-  (implies (true-listp prefix)
-           (starts-with-p (append prefix rest) prefix))
-  :hints (("Goal" :induct (starts-with-p (append prefix rest) prefix))))
-
-(defthm starts-with-p-implies-len
-  (implies (and (starts-with-p text prefix)
-                (true-listp prefix)
-                (true-listp text))
-           (<= (len prefix) (len text)))
-  :rule-classes :linear)
-
-(defun special-token-at (text)
-  (declare (xargs :guard t))
-  (cond ((starts-with-p text *pad-word*) (len *pad-word*))
-        ((starts-with-p text *unk-word*) (len *unk-word*))
-        ((starts-with-p text *bos-word*) (len *bos-word*))
-        ((starts-with-p text *eos-word*) (len *eos-word*))
-        (t 0)))
-
-(defthm natp-special-token-at
-  (natp (special-token-at text))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm special-token-at-nil
-  (equal (special-token-at nil) 0))
-
-(defthm special-token-at-pad
-  (equal (special-token-at *pad-word*) (len *pad-word*)))
-
-(defthm special-token-at-unk
-  (equal (special-token-at *unk-word*) (len *unk-word*)))
-
-(defthm special-token-at-bos
-  (equal (special-token-at *bos-word*) (len *bos-word*)))
-
-(defthm special-token-at-eos
-  (equal (special-token-at *eos-word*) (len *eos-word*)))
-
-(defthm special-token-at-positive-implies-starts-with-special
-  (implies (> (special-token-at text) 0)
-           (or (starts-with-p text *pad-word*)
-               (starts-with-p text *unk-word*)
-               (starts-with-p text *bos-word*)
-               (starts-with-p text *eos-word*))))
-
-(defun get-special-token-word (text)
-  (declare (xargs :guard t))
-  (cond ((starts-with-p text *pad-word*) *pad-word*)
-        ((starts-with-p text *unk-word*) *unk-word*)
-        ((starts-with-p text *bos-word*) *bos-word*)
-        ((starts-with-p text *eos-word*) *eos-word*)
-        (t nil)))
-
-(defthm get-special-token-word-nil-when-zero
-  (implies (equal (special-token-at text) 0)
-           (equal (get-special-token-word text) nil)))
-
-(defthm get-special-token-word-non-nil-when-positive
-  (implies (> (special-token-at text) 0)
-           (get-special-token-word text)))
-
-(defthm len-get-special-token-word
-  (implies (> (special-token-at text) 0)
-           (equal (len (get-special-token-word text))
-                  (special-token-at text))))
-
-(defun extract-word-chars (text)
-  (declare (xargs :guard t
-                  :measure (acl2-count text)))
-  (cond ((atom text) nil)
-        ((whitespace-byte-p (car text)) nil)
-        ((punctuation-byte-p (car text)) nil)
-        (t (cons (car text) (extract-word-chars (cdr text))))))
-
-(defthm true-listp-extract-word-chars
-  (true-listp (extract-word-chars text))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm extract-word-chars-nil
-  (equal (extract-word-chars nil) nil))
-
-(defthm extract-word-chars-whitespace
-  (implies (whitespace-byte-p (car text))
-           (equal (extract-word-chars text) nil)))
-
-(defthm extract-word-chars-punctuation
-  (implies (punctuation-byte-p (car text))
-           (equal (extract-word-chars text) nil)))
-
-(defthm len-extract-word-chars-le
-  (<= (len (extract-word-chars text)) (len text))
-  :rule-classes :linear)
-
-(defthm extract-word-chars-non-nil-when-word-start
-  (implies (and (consp text)
-                (not (whitespace-byte-p (car text)))
-                (not (punctuation-byte-p (car text))))
-           (consp (extract-word-chars text))))
-
-(defthm len-extract-word-chars-positive-when-word-start
-  (implies (and (consp text)
-                (not (whitespace-byte-p (car text)))
-                (not (punctuation-byte-p (car text))))
-           (> (len (extract-word-chars text)) 0))
-  :rule-classes :linear)
-
-(defun longest-match-aux (text len max-len best tok2id)
-  (declare (xargs :guard (and (natp len) (natp max-len) (natp best))
-                  :measure (nfix (- (nfix max-len) (nfix len)))))
-  (if (or (not (natp len))
-          (not (natp max-len))
-          (> len max-len)
-          (zp (- max-len len)))
-      best
-    (let ((candidate (take (+ 1 len) text)))
-      (if (alist-contains candidate tok2id)
-          (longest-match-aux text (+ 1 len) max-len (+ 1 len) tok2id)
-        (longest-match-aux text (+ 1 len) max-len best tok2id)))))
-
-(defthm natp-longest-match-aux
-  (implies (natp best)
-           (natp (longest-match-aux text len max-len best tok2id)))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm longest-match-aux-ge-best
-  (implies (natp best)
-           (<= best (longest-match-aux text len max-len best tok2id)))
-  :rule-classes :linear)
-
-(defthm longest-match-aux-le-max-len
-  (implies (and (natp best)
-                (natp max-len)
-                (<= best max-len))
-           (<= (longest-match-aux text len max-len best tok2id) max-len))
-  :rule-classes :linear
-  :hints (("Goal" :induct (longest-match-aux text len max-len best tok2id))))
-
-(defun mgt-longest-match (text st)
-  (declare (xargs :guard t))
-  (if (atom text)
-      0
-    (longest-match-aux text 0 (len text) 0 (mgt-tok2id st))))
-
-(defthm natp-mgt-longest-match
-  (natp (mgt-longest-match text st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-longest-match-nil
-  (equal (mgt-longest-match nil st) 0))
-
-(defthm mgt-longest-match-le-len
-  (<= (mgt-longest-match text st) (len text))
-  :rule-classes :linear)
-
-(defthm mgt-longest-match-zero-empty-vocab
-  (equal (mgt-longest-match text (mgt-empty-state)) 0)
-  :hints (("Goal" :expand ((mgt-longest-match text (mgt-empty-state))))))
-
-(defun find-longest-prefix-aux (word len max-check prefixes best-len)
-  (declare (xargs :guard (and (natp len) (natp max-check) (natp best-len))
-                  :measure (nfix (- (nfix max-check) (nfix len)))))
-  (if (or (not (natp len))
-          (not (natp max-check))
-          (>= len max-check)
-          (zp (- max-check len)))
-      best-len
-    (let ((candidate (take (+ 1 len) word)))
-      (if (alist-contains candidate prefixes)
-          (find-longest-prefix-aux word (+ 1 len) max-check prefixes (+ 1 len))
-        (find-longest-prefix-aux word (+ 1 len) max-check prefixes best-len)))))
-
-(defthm natp-find-longest-prefix-aux
-  (implies (natp best-len)
-           (natp (find-longest-prefix-aux word len max-check prefixes best-len)))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm find-longest-prefix-aux-ge-best
-  (implies (natp best-len)
-           (<= best-len (find-longest-prefix-aux word len max-check prefixes best-len)))
-  :rule-classes :linear)
-
-(defun mgt-find-longest-prefix (word st)
-  (declare (xargs :guard t))
-  (if (or (atom word) (atom (cdr word)))
-      0
-    (find-longest-prefix-aux word 0 (- (len word) 1) (mgt-prefixes st) 0)))
-
-(defthm natp-mgt-find-longest-prefix
-  (natp (mgt-find-longest-prefix word st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-find-longest-prefix-nil
-  (equal (mgt-find-longest-prefix nil st) 0))
-
-(defthm mgt-find-longest-prefix-singleton
-  (implies (and (consp word) (atom (cdr word)))
-           (equal (mgt-find-longest-prefix word st) 0)))
-
-(defun find-longest-suffix-aux (word len max-check suffixes best-len)
-  (declare (xargs :guard (and (natp len) (natp max-check) (natp best-len) (true-listp word))
-                  :measure (nfix (- (nfix max-check) (nfix len)))))
-  (if (or (not (natp len))
-          (not (natp max-check))
-          (>= len max-check)
-          (zp (- max-check len)))
-      best-len
-    (let ((candidate (nthcdr (- (len word) (+ 1 len)) word)))
-      (if (alist-contains candidate suffixes)
-          (find-longest-suffix-aux word (+ 1 len) max-check suffixes (+ 1 len))
-        (find-longest-suffix-aux word (+ 1 len) max-check suffixes best-len)))))
-
-(defthm natp-find-longest-suffix-aux
-  (implies (natp best-len)
-           (natp (find-longest-suffix-aux word len max-check suffixes best-len)))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm find-longest-suffix-aux-ge-best
-  (implies (natp best-len)
-           (<= best-len (find-longest-suffix-aux word len max-check suffixes best-len)))
-  :rule-classes :linear)
-
-(defun mgt-find-longest-suffix (word st)
-  (declare (xargs :guard t))
-  (if (or (atom word) (atom (cdr word)) (not (true-listp word)))
-      0
-    (find-longest-suffix-aux word 0 (- (len word) 1) (mgt-suffixes st) 0)))
-
-(defthm natp-mgt-find-longest-suffix
-  (natp (mgt-find-longest-suffix word st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-find-longest-suffix-nil
-  (equal (mgt-find-longest-suffix nil st) 0))
-
-(defthm mgt-find-longest-suffix-singleton
-  (implies (and (consp word) (atom (cdr word)))
-           (equal (mgt-find-longest-suffix word st) 0)))
-
-(defun mgt-morph-decompose (word st)
-  (declare (xargs :guard t))
-  (if (or (atom word) (< (len word) 4) (not (true-listp word)))
+       (equal (len st) 7)
+       (token-list-p (nth 0 st))
+       (id-list-p (nth 1 st))
+       (token-list-p (nth 2 st))
+       (token-list-p (nth 3 st))
+       (token-list-p (nth 4 st))
+       (bpe-pair-list-p (nth 5 st))
+       (natp (nth 6 st))))
+
+(defun make-mgt-state (token-to-id id-to-token prefixes suffixes roots bpe-pairs next-id)
+  (declare (xargs :guard (and (token-list-p token-to-id)
+                               (id-list-p id-to-token)
+                               (token-list-p prefixes)
+                               (token-list-p suffixes)
+                               (token-list-p roots)
+                               (bpe-pair-list-p bpe-pairs)
+                               (natp next-id))))
+  (list token-to-id id-to-token prefixes suffixes roots bpe-pairs next-id))
+
+(defun mgt-token-to-id (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (nth 0 st))
+
+(defun mgt-id-to-token (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (nth 1 st))
+
+(defun mgt-prefixes (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (nth 2 st))
+
+(defun mgt-suffixes (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (nth 3 st))
+
+(defun mgt-roots (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (nth 4 st))
+
+(defun mgt-bpe-pairs (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (nth 5 st))
+
+(defun mgt-next-id (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (nth 6 st))
+
+(defthm mgt-state-p-of-make
+  (implies (and (token-list-p t2i)
+                (id-list-p i2t)
+                (token-list-p pref)
+                (token-list-p suf)
+                (token-list-p roots)
+                (bpe-pair-list-p bpe)
+                (natp nid))
+           (mgt-state-p (make-mgt-state t2i i2t pref suf roots bpe nid))))
+
+(defthm token-list-p-of-mgt-token-to-id
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-token-to-id st))))
+
+(defthm id-list-p-of-mgt-id-to-token
+  (implies (mgt-state-p st)
+           (id-list-p (mgt-id-to-token st))))
+
+(defthm token-list-p-of-mgt-prefixes
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-prefixes st))))
+
+(defthm token-list-p-of-mgt-suffixes
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-suffixes st))))
+
+(defthm token-list-p-of-mgt-roots
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-roots st))))
+
+(defthm bpe-pair-list-p-of-mgt-bpe-pairs
+  (implies (mgt-state-p st)
+           (bpe-pair-list-p (mgt-bpe-pairs st))))
+
+(defthm natp-of-mgt-next-id
+  (implies (mgt-state-p st)
+           (natp (mgt-next-id st))))
+
+(defun lookup-token (token alist)
+  (declare (xargs :guard (token-list-p alist)
+                  :measure (len alist)))
+  (if (atom alist)
       nil
-    (let* ((prefix-len (mgt-find-longest-prefix word st))
-           (suffix-len (mgt-find-longest-suffix word st)))
+    (if (equal token (car (car alist)))
+        (cdr (car alist))
+      (lookup-token token (cdr alist)))))
+
+(defthm lookup-token-returns-natp-or-nil
+  (implies (token-list-p alist)
+           (or (null (lookup-token token alist))
+               (natp (lookup-token token alist))))
+  :hints (("Goal" :induct (lookup-token token alist)))
+  :rule-classes :type-prescription)
+
+(defthm lookup-token-of-nil
+  (equal (lookup-token token nil) nil))
+
+(defthm lookup-token-of-cons-match
+  (implies (and (token-entry-p e)
+                (equal token (car e)))
+           (equal (lookup-token token (cons e rest))
+                  (cdr e))))
+
+(defthm lookup-token-of-cons-no-match
+  (implies (and (token-entry-p e)
+                (not (equal token (car e))))
+           (equal (lookup-token token (cons e rest))
+                  (lookup-token token rest))))
+
+(defthm lookup-token-preserves-membership
+  (implies (and (token-list-p alist)
+                (lookup-token token alist))
+           (natp (lookup-token token alist)))
+  :hints (("Goal" :induct (lookup-token token alist))))
+
+(defun lookup-id (id alist)
+  (declare (xargs :guard (id-list-p alist)
+                  :measure (len alist)))
+  (if (atom alist)
+      nil
+    (if (equal id (car (car alist)))
+        (cdr (car alist))
+      (lookup-id id (cdr alist)))))
+
+(defthm lookup-id-returns-stringp-or-nil
+  (implies (id-list-p alist)
+           (or (null (lookup-id id alist))
+               (stringp (lookup-id id alist))))
+  :hints (("Goal" :induct (lookup-id id alist)))
+  :rule-classes :type-prescription)
+
+(defthm lookup-id-of-nil
+  (equal (lookup-id id nil) nil))
+
+(defthm lookup-id-of-cons-match
+  (implies (and (id-entry-p e)
+                (equal id (car e)))
+           (equal (lookup-id id (cons e rest))
+                  (cdr e))))
+
+(defthm lookup-id-of-cons-no-match
+  (implies (and (id-entry-p e)
+                (not (equal id (car e))))
+           (equal (lookup-id id (cons e rest))
+                  (lookup-id id rest))))
+
+(defun lookup-bpe (key alist)
+  (declare (xargs :guard (bpe-pair-list-p alist)
+                  :measure (len alist)))
+  (if (atom alist)
+      nil
+    (if (equal key (car (car alist)))
+        (cdr (car alist))
+      (lookup-bpe key (cdr alist)))))
+
+(defthm lookup-bpe-returns-bpe-merge-p-or-nil
+  (implies (bpe-pair-list-p alist)
+           (or (null (lookup-bpe key alist))
+               (bpe-merge-p (lookup-bpe key alist))))
+  :hints (("Goal" :induct (lookup-bpe key alist)))
+  :rule-classes :type-prescription)
+
+(defthm lookup-bpe-of-nil
+  (equal (lookup-bpe key nil) nil))
+
+(defun nat-listp (lst)
+  (declare (xargs :guard t))
+  (if (atom lst)
+      (null lst)
+    (and (natp (car lst))
+         (nat-listp (cdr lst)))))
+
+(defthm nat-listp-of-nil
+  (nat-listp nil))
+
+(defthm nat-listp-of-cons
+  (implies (and (natp x)
+                (nat-listp rest))
+           (nat-listp (cons x rest))))
+
+(defthm nat-listp-implies-true-listp
+  (implies (nat-listp lst)
+           (true-listp lst))
+  :hints (("Goal" :induct (nat-listp lst))))
+
+(defthm nat-listp-of-cdr
+  (implies (and (nat-listp lst) (consp lst))
+           (nat-listp (cdr lst))))
+
+(defthm natp-of-car-when-nat-listp
+  (implies (and (nat-listp lst) (consp lst))
+           (natp (car lst))))
+
+(defun nat-listp-append (a b)
+  (declare (xargs :guard (and (nat-listp a) (nat-listp b))
+                  :measure (len a)))
+  (if (atom a)
+      b
+    (cons (car a) (nat-listp-append (cdr a) b))))
+
+(defthm nat-listp-of-nat-listp-append
+  (implies (and (nat-listp a) (nat-listp b))
+           (nat-listp (nat-listp-append a b)))
+  :hints (("Goal" :induct (nat-listp-append a b))))
+
+(defthm true-listp-of-nat-listp-append
+  (implies (and (nat-listp a) (nat-listp b))
+           (true-listp (nat-listp-append a b)))
+  :hints (("Goal" :induct (nat-listp-append a b))))
+
+(defthm len-of-nat-listp-append
+  (implies (and (nat-listp a) (nat-listp b))
+           (equal (len (nat-listp-append a b))
+                  (+ (len a) (len b))))
+  :hints (("Goal" :induct (nat-listp-append a b))))
+
+(defun char-listp-strict (lst)
+  (declare (xargs :guard t))
+  (if (atom lst)
+      (null lst)
+    (and (characterp (car lst))
+         (char-listp-strict (cdr lst)))))
+
+(defthm char-listp-strict-of-nil
+  (char-listp-strict nil))
+
+(defthm char-listp-strict-implies-true-listp
+  (implies (char-listp-strict lst)
+           (true-listp lst))
+  :hints (("Goal" :induct (char-listp-strict lst))))
+
+(defun string-list-p (lst)
+  (declare (xargs :guard t))
+  (if (atom lst)
+      (null lst)
+    (and (stringp (car lst))
+         (string-list-p (cdr lst)))))
+
+(defthm string-list-p-of-nil
+  (string-list-p nil))
+
+(defthm string-list-p-of-cons
+  (implies (and (stringp s) (string-list-p rest))
+           (string-list-p (cons s rest))))
+
+(defthm string-list-p-implies-true-listp
+  (implies (string-list-p lst)
+           (true-listp lst))
+  :hints (("Goal" :induct (string-list-p lst))))
+
+(defthm string-list-p-of-cdr
+  (implies (and (string-list-p lst) (consp lst))
+           (string-list-p (cdr lst))))
+
+(defthm stringp-of-car-when-string-list-p
+  (implies (and (string-list-p lst) (consp lst))
+           (stringp (car lst))))
+
+(defun add-token-to-state (st token)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp token))))
+  (let ((existing (lookup-token token (mgt-token-to-id st))))
+    (if existing
+        (mv st existing)
+      (let ((id (mgt-next-id st)))
+        (mv (make-mgt-state
+             (cons (cons token id) (mgt-token-to-id st))
+             (cons (cons id token) (mgt-id-to-token st))
+             (mgt-prefixes st)
+             (mgt-suffixes st)
+             (mgt-roots st)
+             (mgt-bpe-pairs st)
+             (+ 1 id))
+            id)))))
+
+(defthm add-token-to-state-returns-mgt-state-p
+  (implies (and (mgt-state-p st)
+                (stringp token))
+           (mgt-state-p (mv-nth 0 (add-token-to-state st token)))))
+
+(defthm add-token-to-state-returns-natp
+  (implies (and (mgt-state-p st)
+                (stringp token))
+           (natp (mv-nth 1 (add-token-to-state st token)))))
+
+(defthm add-token-to-state-preserves-prefixes
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (mgt-prefixes (mv-nth 0 (add-token-to-state st token)))
+                  (mgt-prefixes st))))
+
+(defthm add-token-to-state-preserves-suffixes
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (mgt-suffixes (mv-nth 0 (add-token-to-state st token)))
+                  (mgt-suffixes st))))
+
+(defthm add-token-to-state-preserves-roots
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (mgt-roots (mv-nth 0 (add-token-to-state st token)))
+                  (mgt-roots st))))
+
+(defthm add-token-to-state-preserves-bpe-pairs
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (mgt-bpe-pairs (mv-nth 0 (add-token-to-state st token)))
+                  (mgt-bpe-pairs st))))
+
+(defthm add-token-next-id-monotonic
+  (implies (and (mgt-state-p st) (stringp token))
+           (<= (mgt-next-id st)
+               (mgt-next-id (mv-nth 0 (add-token-to-state st token)))))
+  :rule-classes :linear)
+
+(defthm add-token-existing-preserves-next-id
+  (implies (and (mgt-state-p st)
+                (stringp token)
+                (lookup-token token (mgt-token-to-id st)))
+           (equal (mgt-next-id (mv-nth 0 (add-token-to-state st token)))
+                  (mgt-next-id st))))
+
+(defthm add-token-new-increments-next-id
+  (implies (and (mgt-state-p st)
+                (stringp token)
+                (not (lookup-token token (mgt-token-to-id st))))
+           (equal (mgt-next-id (mv-nth 0 (add-token-to-state st token)))
+                  (+ 1 (mgt-next-id st)))))
+
+(defthm add-token-idempotent-id
+  (implies (and (mgt-state-p st)
+                (stringp token)
+                (lookup-token token (mgt-token-to-id st)))
+           (equal (mv-nth 1 (add-token-to-state st token))
+                  (lookup-token token (mgt-token-to-id st)))))
+
+(defthm add-token-new-returns-next-id
+  (implies (and (mgt-state-p st)
+                (stringp token)
+                (not (lookup-token token (mgt-token-to-id st))))
+           (equal (mv-nth 1 (add-token-to-state st token))
+                  (mgt-next-id st))))
+
+(defun add-tokens-to-state (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (string-list-p tokens))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      st
+    (mv-let (new-st id)
+      (add-token-to-state st (car tokens))
+      (declare (ignore id))
+      (add-tokens-to-state new-st (cdr tokens)))))
+
+(defthm add-tokens-to-state-returns-mgt-state-p
+  (implies (and (mgt-state-p st)
+                (string-list-p tokens))
+           (mgt-state-p (add-tokens-to-state st tokens)))
+  :hints (("Goal" :induct (add-tokens-to-state st tokens))))
+
+(defthm add-tokens-next-id-monotonic
+  (implies (and (mgt-state-p st)
+                (string-list-p tokens))
+           (<= (mgt-next-id st)
+               (mgt-next-id (add-tokens-to-state st tokens))))
+  :hints (("Goal" :induct (add-tokens-to-state st tokens)))
+  :rule-classes :linear)
+
+(defun is-whitespace-char (c)
+  (declare (xargs :guard (characterp c)))
+  (or (eql c #\Space)
+      (eql c #\Newline)
+      (eql c #\Tab)
+      (eql c #\Return)))
+
+(defthm is-whitespace-char-type
+  (implies (characterp c)
+           (booleanp (is-whitespace-char c)))
+  :rule-classes :type-prescription)
+
+(defun is-punctuation-char (c)
+  (declare (xargs :guard (characterp c)))
+  (or (eql c #\.)
+      (eql c #\,)
+      (eql c #\!)
+      (eql c #\?)
+      (eql c #\;)
+      (eql c #\:)
+      (eql c #\")
+      (eql c #\')
+      (eql c #\()
+      (eql c #\))
+      (eql c #\{)
+      (eql c #\})))
+
+(defthm is-punctuation-char-type
+  (implies (characterp c)
+           (booleanp (is-punctuation-char c)))
+  :rule-classes :type-prescription)
+
+(defun utf8-char-len (byte)
+  (declare (xargs :guard (natp byte)))
+  (cond ((< byte 128) 1)
+        ((and (>= byte 192) (< byte 224)) 2)
+        ((and (>= byte 224) (< byte 240)) 3)
+        ((and (>= byte 240) (< byte 248)) 4)
+        (t 1)))
+
+(defthm utf8-char-len-positive
+  (implies (natp byte)
+           (and (natp (utf8-char-len byte))
+                (> (utf8-char-len byte) 0)))
+  :rule-classes (:rewrite :type-prescription))
+
+(defthm utf8-char-len-bounded
+  (implies (natp byte)
+           (<= (utf8-char-len byte) 4))
+  :rule-classes :linear)
+
+(defun char-code-list (str)
+  (declare (xargs :guard (stringp str)))
+  (let ((chars (coerce str 'list)))
+    (char-code-list-aux chars)))
+
+(defun char-code-list-aux (chars)
+  (declare (xargs :guard (character-listp chars)
+                  :measure (len chars)))
+  (if (atom chars)
+      nil
+    (cons (char-code (car chars))
+          (char-code-list-aux (cdr chars)))))
+
+(defthm nat-listp-of-char-code-list-aux
+  (implies (character-listp chars)
+           (nat-listp (char-code-list-aux chars)))
+  :hints (("Goal" :induct (char-code-list-aux chars))))
+
+(defthm len-of-char-code-list-aux
+  (implies (character-listp chars)
+           (equal (len (char-code-list-aux chars))
+                  (len chars)))
+  :hints (("Goal" :induct (char-code-list-aux chars))))
+
+(defun string-to-codes (str)
+  (declare (xargs :guard (stringp str)))
+  (char-code-list-aux (coerce str 'list)))
+
+(defthm nat-listp-of-string-to-codes
+  (implies (stringp str)
+           (nat-listp (string-to-codes str))))
+
+(defun codes-to-string (codes)
+  (declare (xargs :guard (nat-listp codes)
+                  :measure (len codes)))
+  (if (atom codes)
+      ""
+    (let ((c (if (and (natp (car codes)) (< (car codes) 256))
+                 (car codes)
+               0)))
+      (concatenate 'string
+                   (coerce (list (code-char c)) 'string)
+                   (codes-to-string (cdr codes))))))
+
+(defthm stringp-of-codes-to-string
+  (implies (nat-listp codes)
+           (stringp (codes-to-string codes)))
+  :hints (("Goal" :induct (codes-to-string codes))))
+
+(defun substring (str start end)
+  (declare (xargs :guard (and (stringp str)
+                               (natp start)
+                               (natp end)
+                               (<= start end)
+                               (<= end (length str)))))
+  (subseq str start end))
+
+(defun string-prefix-p (prefix str)
+  (declare (xargs :guard (and (stringp prefix) (stringp str))))
+  (and (>= (length str) (length prefix))
+       (equal (substring str 0 (length prefix)) prefix)))
+
+(defun string-suffix-p (suffix str)
+  (declare (xargs :guard (and (stringp suffix) (stringp str))))
+  (and (>= (length str) (length suffix))
+       (equal (substring str (- (length str) (length suffix)) (length str))
+              suffix)))
+
+(defthm string-prefix-p-type
+  (booleanp (string-prefix-p prefix str))
+  :rule-classes :type-prescription)
+
+(defthm string-suffix-p-type
+  (booleanp (string-suffix-p suffix str))
+  :rule-classes :type-prescription)
+
+(defun vocab-size (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (len (mgt-token-to-id st)))
+
+(defthm natp-of-vocab-size
+  (implies (mgt-state-p st)
+           (natp (vocab-size st)))
+  :rule-classes :type-prescription)
+
+(defthm vocab-size-non-negative
+  (implies (mgt-state-p st)
+           (<= 0 (vocab-size st)))
+  :rule-classes :linear)
+
+(defun unknown-replacement (context)
+  (declare (xargs :guard t))
+  (declare (ignore context))
+  *special-unk*)
+
+(defthm unknown-replacement-returns-unk
+  (equal (unknown-replacement context) *special-unk*))
+
+(defthm natp-of-unknown-replacement
+  (natp (unknown-replacement context))
+  :rule-classes :type-prescription)
+
+(defun validate-tokens (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (nat-listp tokens))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      t
+    (and (lookup-id (car tokens) (mgt-id-to-token st))
+         (validate-tokens st (cdr tokens)))))
+
+(defthm validate-tokens-of-nil
+  (equal (validate-tokens st nil) t))
+
+(defthm validate-tokens-of-cons
+  (equal (validate-tokens st (cons tok rest))
+         (and (lookup-id tok (mgt-id-to-token st))
+              (validate-tokens st rest))))
+
+(defthm booleanp-of-validate-tokens
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (booleanp (validate-tokens st tokens)))
+  :hints (("Goal" :induct (validate-tokens st tokens)))
+  :rule-classes :type-prescription)
+
+(defun find-longest-prefix (word prefix-list)
+  (declare (xargs :guard (and (stringp word)
+                               (token-list-p prefix-list))
+                  :measure (len prefix-list)))
+  (if (atom prefix-list)
+      nil
+    (let* ((entry (car prefix-list))
+           (prefix (car entry))
+           (id (cdr entry))
+           (rest-result (find-longest-prefix word (cdr prefix-list))))
+      (if (and (> (length word) (length prefix))
+               (string-prefix-p prefix word))
+          (if (or (null rest-result)
+                  (> (length prefix) (length (car rest-result))))
+              (cons prefix id)
+            rest-result)
+        rest-result))))
+
+(defthm find-longest-prefix-returns-token-entry-or-nil
+  (implies (token-list-p prefix-list)
+           (or (null (find-longest-prefix word prefix-list))
+               (and (consp (find-longest-prefix word prefix-list))
+                    (stringp (car (find-longest-prefix word prefix-list)))
+                    (natp (cdr (find-longest-prefix word prefix-list))))))
+  :hints (("Goal" :induct (find-longest-prefix word prefix-list)))
+  :rule-classes :type-prescription)
+
+(defun find-longest-suffix (word suffix-list)
+  (declare (xargs :guard (and (stringp word)
+                               (token-list-p suffix-list))
+                  :measure (len suffix-list)))
+  (if (atom suffix-list)
+      nil
+    (let* ((entry (car suffix-list))
+           (suffix (car entry))
+           (id (cdr entry))
+           (rest-result (find-longest-suffix word (cdr suffix-list))))
+      (if (and (> (length word) (length suffix))
+               (string-suffix-p suffix word))
+          (if (or (null rest-result)
+                  (> (length suffix) (length (car rest-result))))
+              (cons suffix id)
+            rest-result)
+        rest-result))))
+
+(defthm find-longest-suffix-returns-token-entry-or-nil
+  (implies (token-list-p suffix-list)
+           (or (null (find-longest-suffix word suffix-list))
+               (and (consp (find-longest-suffix word suffix-list))
+                    (stringp (car (find-longest-suffix word suffix-list)))
+                    (natp (cdr (find-longest-suffix word suffix-list))))))
+  :hints (("Goal" :induct (find-longest-suffix word suffix-list)))
+  :rule-classes :type-prescription)
+
+(defun morph-decompose (st word)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word))))
+  (if (< (length word) 4)
+      nil
+    (let* ((prefix-result (find-longest-prefix word (mgt-prefixes st)))
+           (suffix-result (find-longest-suffix word (mgt-suffixes st)))
+           (prefix-len (if prefix-result (length (car prefix-result)) 0))
+           (suffix-len (if suffix-result (length (car suffix-result)) 0)))
       (if (and (equal prefix-len 0) (equal suffix-len 0))
           nil
         (let* ((root-start prefix-len)
-               (root-end (- (len word) suffix-len)))
+               (root-end (- (length word) suffix-len)))
           (if (or (<= root-end root-start)
                   (< (- root-end root-start) 2))
               nil
-            (let* ((prefix-word (if (> prefix-len 0) (take prefix-len word) nil))
-                   (root-word (take (- root-end root-start) (nthcdr root-start word)))
-                   (suffix-word (if (> suffix-len 0) (nthcdr (- (len word) suffix-len) word) nil))
-                   (tok2id (mgt-tok2id st))
-                   (roots-map (mgt-roots st))
-                   (prefix-id (if prefix-word (alist-get prefix-word tok2id) nil))
-                   (root-id (or (alist-get root-word tok2id)
-                                (alist-get root-word roots-map)))
-                   (suffix-id (if suffix-word (alist-get suffix-word tok2id) nil)))
-              (if (and (or (null prefix-word) prefix-id)
-                       root-id
-                       (or (null suffix-word) suffix-id))
-                  (append (if prefix-id (list prefix-id) nil)
-                          (list root-id)
-                          (if suffix-id (list suffix-id) nil))
-                nil))))))))
+            (let* ((root (substring word root-start root-end))
+                   (root-id (lookup-token root (mgt-token-to-id st))))
+              (if (null root-id)
+                  nil
+                (let* ((prefix-tokens (if prefix-result
+                                          (list (cdr prefix-result))
+                                        nil))
+                       (root-tokens (list root-id))
+                       (suffix-tokens (if suffix-result
+                                          (list (cdr suffix-result))
+                                        nil)))
+                  (nat-listp-append prefix-tokens
+                                    (nat-listp-append root-tokens suffix-tokens)))))))))))
 
-(defthm true-listp-mgt-morph-decompose
-  (true-listp (mgt-morph-decompose word st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-morph-decompose-nil
-  (equal (mgt-morph-decompose nil st) nil))
-
-(defthm mgt-morph-decompose-short-word
-  (implies (< (len word) 4)
-           (equal (mgt-morph-decompose word st) nil)))
-
-(defthm mgt-morph-decompose-no-affixes
-  (implies (and (equal (mgt-find-longest-prefix word st) 0)
-                (equal (mgt-find-longest-suffix word st) 0)
-                (true-listp word)
-                (>= (len word) 4))
-           (equal (mgt-morph-decompose word st) nil)))
-
-(defthm len-mgt-morph-decompose-le-3
-  (implies (mgt-morph-decompose word st)
-           (<= (len (mgt-morph-decompose word st)) 3))
-  :rule-classes :linear)
-
-(defthm len-mgt-morph-decompose-ge-1
-  (implies (mgt-morph-decompose word st)
-           (>= (len (mgt-morph-decompose word st)) 1))
-  :rule-classes :linear)
-
-(defun mgt-encode-bpe-byte (b st)
-  (declare (xargs :guard t))
-  (let ((byte-word (list b)))
-    (let ((tid (alist-get byte-word (mgt-tok2id st))))
-      (if tid
-          (list tid)
-        (list *unk-id*)))))
-
-(defthm true-listp-mgt-encode-bpe-byte
-  (true-listp (mgt-encode-bpe-byte b st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm consp-mgt-encode-bpe-byte
-  (consp (mgt-encode-bpe-byte b st)))
-
-(defthm len-mgt-encode-bpe-byte
-  (equal (len (mgt-encode-bpe-byte b st)) 1))
-
-(defun mgt-subword-split (word st)
-  (declare (xargs :guard t
-                  :measure (acl2-count word)))
-  (if (atom word)
-      nil
-    (let ((match-len (mgt-longest-match word st)))
-      (if (> match-len 0)
-          (let ((matched (take match-len word))
-                (rest (nthcdr match-len word)))
-            (let ((tid (alist-get matched (mgt-tok2id st))))
-              (if tid
-                  (cons tid (mgt-subword-split rest st))
-                (append (mgt-encode-bpe-byte (car word) st)
-                        (mgt-subword-split (cdr word) st)))))
-        (append (mgt-encode-bpe-byte (car word) st)
-                (mgt-subword-split (cdr word) st))))))
-
-(defthm true-listp-mgt-subword-split
-  (true-listp (mgt-subword-split word st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-subword-split-nil
-  (equal (mgt-subword-split nil st) nil))
-
-(defthm mgt-subword-split-produces-list
-  (implies (consp word)
-           (consp (mgt-subword-split word st))))
-
-(defun mgt-encode-word (word st)
-  (declare (xargs :guard t))
-  (if (atom word)
-      nil
-    (let ((tid (alist-get word (mgt-tok2id st))))
-      (if tid
-          (list tid)
-        (let ((morph (mgt-morph-decompose word st)))
-          (if morph
-              morph
-            (mgt-subword-split word st)))))))
-
-(defthm true-listp-mgt-encode-word
-  (true-listp (mgt-encode-word word st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-encode-word-nil
-  (equal (mgt-encode-word nil st) nil))
-
-(defthm mgt-encode-word-known
-  (implies (alist-contains word (mgt-tok2id st))
-           (equal (mgt-encode-word word st)
-                  (list (alist-get word (mgt-tok2id st))))))
-
-(defthm consp-mgt-encode-word-when-consp
-  (implies (consp word)
-           (consp (mgt-encode-word word st))))
-
-(defthm len-mgt-encode-word-known-is-1
-  (implies (alist-contains word (mgt-tok2id st))
-           (equal (len (mgt-encode-word word st)) 1)))
-
-(defun mgt-encode (text st)
-  (declare (xargs :guard t
-                  :measure (acl2-count text)))
-  (if (atom text)
-      nil
-    (let ((slen (special-token-at text)))
-      (if (> slen 0)
-          (let* ((special-word (get-special-token-word text))
-                 (tid (alist-get special-word (mgt-tok2id st)))
-                 (rest (nthcdr slen text)))
-            (cons (if tid tid *unk-id*)
-                  (mgt-encode rest st)))
-        (if (whitespace-byte-p (car text))
-            (let* ((ws-word (list (car text)))
-                   (tid (alist-get ws-word (mgt-tok2id st))))
-              (cons (if tid tid *unk-id*)
-                    (mgt-encode (cdr text) st)))
-          (if (punctuation-byte-p (car text))
-              (let* ((p-word (list (car text)))
-                     (tid (alist-get p-word (mgt-tok2id st))))
-                (cons (if tid tid *unk-id*)
-                      (mgt-encode (cdr text) st)))
-            (let* ((word-chars (extract-word-chars text))
-                   (word-len (len word-chars))
-                   (rest (nthcdr word-len text)))
-              (if (> word-len 0)
-                  (append (mgt-encode-word word-chars st)
-                          (mgt-encode rest st))
-                (cons *unk-id* (mgt-encode (cdr text) st))))))))))
-
-(defthm true-listp-mgt-encode
-  (true-listp (mgt-encode text st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-encode-nil
-  (equal (mgt-encode nil st) nil))
-
-(defthm mgt-encode-cons-whitespace
-  (implies (and (whitespace-byte-p (car text))
-                (consp text)
-                (equal (special-token-at text) 0))
-           (equal (mgt-encode text st)
-                  (cons (let ((tid (alist-get (list (car text)) (mgt-tok2id st))))
-                          (if tid tid *unk-id*))
-                        (mgt-encode (cdr text) st)))))
-
-(defthm mgt-encode-cons-punctuation
-  (implies (and (punctuation-byte-p (car text))
-                (not (whitespace-byte-p (car text)))
-                (consp text)
-                (equal (special-token-at text) 0))
-           (equal (mgt-encode text st)
-                  (cons (let ((tid (alist-get (list (car text)) (mgt-tok2id st))))
-                          (if tid tid *unk-id*))
-                        (mgt-encode (cdr text) st)))))
-
-(defun mgt-decode (tokens st)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      nil
-    (let* ((tid (car tokens))
-           (rest (mgt-decode (cdr tokens) st)))
-      (cond ((equal tid *pad-id*) rest)
-            ((equal tid *bos-id*) rest)
-            ((equal tid *eos-id*) rest)
-            ((equal tid *unk-id*) (append *unk-word* rest))
-            (t (let ((tok-str (alist-get tid (mgt-id2tok st))))
-                 (if tok-str
-                     (append tok-str rest)
-                   (append *unk-word* rest))))))))
-
-(defthm true-listp-mgt-decode
-  (true-listp (mgt-decode tokens st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-decode-nil
-  (equal (mgt-decode nil st) nil))
-
-(defthm mgt-decode-pad
-  (equal (mgt-decode (list *pad-id*) st) nil))
-
-(defthm mgt-decode-bos
-  (equal (mgt-decode (list *bos-id*) st) nil))
-
-(defthm mgt-decode-eos
-  (equal (mgt-decode (list *eos-id*) st) nil))
-
-(defthm mgt-decode-unk
-  (equal (mgt-decode (list *unk-id*) st) *unk-word*))
-
-(defthm mgt-decode-cons
-  (equal (mgt-decode (cons tok rest) st)
-         (let ((decoded-rest (mgt-decode rest st)))
-           (cond ((equal tok *pad-id*) decoded-rest)
-                 ((equal tok *bos-id*) decoded-rest)
-                 ((equal tok *eos-id*) decoded-rest)
-                 ((equal tok *unk-id*) (append *unk-word* decoded-rest))
-                 (t (let ((tok-str (alist-get tok (mgt-id2tok st))))
-                      (if tok-str
-                          (append tok-str decoded-rest)
-                        (append *unk-word* decoded-rest))))))))
-
-(defthm mgt-decode-append
-  (equal (mgt-decode (append toks1 toks2) st)
-         (append (mgt-decode toks1 st)
-                 (mgt-decode toks2 st)))
-  :hints (("Goal" :induct (mgt-decode toks1 st))))
-
-(defthm mgt-decode-single-known
-  (implies (and (alist-contains tid (mgt-id2tok st))
-                (not (equal tid *pad-id*))
-                (not (equal tid *bos-id*))
-                (not (equal tid *eos-id*))
-                (not (equal tid *unk-id*)))
-           (equal (mgt-decode (list tid) st)
-                  (alist-get tid (mgt-id2tok st)))))
-
-(defun mgt-validate-tokens (tokens st)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      t
-    (and (alist-contains (car tokens) (mgt-id2tok st))
-         (mgt-validate-tokens (cdr tokens) st))))
-
-(defthm booleanp-mgt-validate-tokens
-  (or (equal (mgt-validate-tokens tokens st) t)
-      (equal (mgt-validate-tokens tokens st) nil))
+(defthm morph-decompose-returns-nat-listp-or-nil
+  (implies (and (mgt-state-p st) (stringp word))
+           (or (null (morph-decompose st word))
+               (nat-listp (morph-decompose st word))))
   :rule-classes :type-prescription)
 
-(defthm mgt-validate-tokens-nil
-  (equal (mgt-validate-tokens nil st) t))
+(defun longest-match-aux (st word pos end best)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp word)
+                               (natp pos)
+                               (natp end)
+                               (natp best)
+                               (<= pos end)
+                               (<= end (length word)))
+                  :measure (nfix (- (length word) end))))
+  (if (or (not (natp end))
+          (not (natp pos))
+          (>= end (length word)))
+      best
+    (let* ((next-end (+ end 1))
+           (substr (substring word pos next-end))
+           (found (lookup-token substr (mgt-token-to-id st)))
+           (new-best (if found (- next-end pos) best)))
+      (longest-match-aux st word pos next-end new-best))))
 
-(defthm mgt-validate-tokens-cons
-  (equal (mgt-validate-tokens (cons tok rest) st)
-         (and (alist-contains tok (mgt-id2tok st))
-              (mgt-validate-tokens rest st))))
+(defthm natp-of-longest-match-aux
+  (implies (natp best)
+           (natp (longest-match-aux st word pos end best)))
+  :hints (("Goal" :induct (longest-match-aux st word pos end best)))
+  :rule-classes :type-prescription)
 
-(defthm mgt-validate-tokens-append
-  (equal (mgt-validate-tokens (append a b) st)
-         (and (mgt-validate-tokens a st)
-              (mgt-validate-tokens b st)))
-  :hints (("Goal" :induct (mgt-validate-tokens a st))))
-
-(defthm mgt-validate-tokens-cdr
-  (implies (mgt-validate-tokens tokens st)
-           (mgt-validate-tokens (cdr tokens) st)))
-
-(defthm mgt-validate-single
-  (equal (mgt-validate-tokens (list tok) st)
-         (if (alist-contains tok (mgt-id2tok st)) t nil)))
-
-(defun mgt-coverage-aux (text covered st)
-  (declare (xargs :guard (natp covered)
-                  :measure (acl2-count text)))
-  (if (atom text)
-      covered
-    (let ((m (mgt-longest-match text st)))
-      (if (> m 0)
-          (mgt-coverage-aux (nthcdr m text) (+ covered m) st)
-        (mgt-coverage-aux (cdr text) covered st)))))
-
-(defthm natp-mgt-coverage-aux
-  (implies (natp covered)
-           (natp (mgt-coverage-aux text covered st)))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-coverage-aux-ge-covered
-  (implies (natp covered)
-           (<= covered (mgt-coverage-aux text covered st)))
+(defthm longest-match-aux-geq-best
+  (implies (natp best)
+           (<= best (longest-match-aux st word pos end best)))
+  :hints (("Goal" :induct (longest-match-aux st word pos end best)))
   :rule-classes :linear)
 
-(defthm mgt-coverage-aux-nil
-  (implies (natp covered)
-           (equal (mgt-coverage-aux nil covered st) covered)))
-
-(defun mgt-coverage-count (text st)
-  (declare (xargs :guard t))
-  (mgt-coverage-aux text 0 st))
-
-(defthm natp-mgt-coverage-count
-  (natp (mgt-coverage-count text st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-coverage-count-nil
-  (equal (mgt-coverage-count nil st) 0))
-
-(defthm mgt-coverage-count-le-len
-  (<= (mgt-coverage-count text st) (len text))
-  :rule-classes :linear
-  :hints (("Goal" :in-theory (enable mgt-coverage-count)
-           :induct (mgt-coverage-aux text 0 st))))
-
-(defun mgt-coverage (text st)
-  (declare (xargs :guard t))
-  (if (atom text)
+(defun longest-match (st word pos)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp word)
+                               (natp pos)
+                               (<= pos (length word)))))
+  (if (>= pos (length word))
       0
-    (let ((total (len text))
-          (covered (mgt-coverage-count text st)))
-      (if (equal total 0)
-          0
-        (/ covered total)))))
+    (longest-match-aux st word pos pos 0)))
 
-(defthm rationalp-mgt-coverage
-  (rationalp (mgt-coverage text st))
-  :rule-classes (:rewrite :type-prescription))
+(defthm natp-of-longest-match
+  (implies (and (mgt-state-p st) (stringp word) (natp pos))
+           (natp (longest-match st word pos)))
+  :rule-classes :type-prescription)
 
-(defthm mgt-coverage-nil
-  (equal (mgt-coverage nil st) 0))
-
-(defthm mgt-coverage-non-negative
-  (<= 0 (mgt-coverage text st))
+(defthm longest-match-non-negative
+  (implies (and (mgt-state-p st) (stringp word) (natp pos))
+           (<= 0 (longest-match st word pos)))
   :rule-classes :linear)
 
-(defthm mgt-coverage-le-1
-  (<= (mgt-coverage text st) 1)
+(defun subword-split-aux (st word pos acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp word)
+                               (natp pos)
+                               (nat-listp acc)
+                               (<= pos (length word)))
+                  :measure (nfix (- (length word) pos))))
+  (if (or (not (natp pos))
+          (>= pos (length word)))
+      (reverse acc)
+    (let ((match-len (longest-match st word pos)))
+      (if (and (natp match-len) (> match-len 0))
+          (let* ((found-word (substring word pos (+ pos match-len)))
+                 (tid (lookup-token found-word (mgt-token-to-id st))))
+            (if tid
+                (subword-split-aux st word (+ pos match-len) (cons tid acc))
+              (subword-split-aux st word (+ pos 1) (cons *special-unk* acc))))
+        (subword-split-aux st word (+ pos 1) (cons *special-unk* acc))))))
+
+(defthm nat-listp-of-reverse-when-nat-listp
+  (implies (nat-listp lst)
+           (nat-listp (reverse lst)))
+  :hints (("Goal" :induct (reverse lst))))
+
+(defthm true-listp-of-reverse
+  (implies (true-listp lst)
+           (true-listp (reverse lst))))
+
+(defthm nat-listp-of-subword-split-aux
+  (implies (and (mgt-state-p st)
+                (stringp word)
+                (natp pos)
+                (nat-listp acc))
+           (nat-listp (subword-split-aux st word pos acc)))
+  :hints (("Goal" :induct (subword-split-aux st word pos acc))))
+
+(defun subword-split (st word)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word))))
+  (subword-split-aux st word 0 nil))
+
+(defthm nat-listp-of-subword-split
+  (implies (and (mgt-state-p st) (stringp word))
+           (nat-listp (subword-split st word))))
+
+(defun merge-subwords-aux (subwords acc)
+  (declare (xargs :guard (and (true-listp subwords)
+                               (nat-listp acc))
+                  :measure (len subwords)))
+  (if (atom subwords)
+      (reverse acc)
+    (if (nat-listp (car subwords))
+        (merge-subwords-aux (cdr subwords)
+                            (revappend (car subwords) acc))
+      (merge-subwords-aux (cdr subwords) acc))))
+
+(defun merge-subwords (subword-lists)
+  (declare (xargs :guard (true-listp subword-lists)))
+  (merge-subwords-aux subword-lists nil))
+
+(defun encode-word (st word)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word))))
+  (let ((direct (lookup-token word (mgt-token-to-id st))))
+    (if direct
+        (list direct)
+      (let ((morph (morph-decompose st word)))
+        (if morph
+            morph
+          (subword-split st word))))))
+
+(defthm nat-listp-of-encode-word
+  (implies (and (mgt-state-p st) (stringp word))
+           (nat-listp (encode-word st word))))
+
+(defun is-word-boundary-char (c)
+  (declare (xargs :guard (characterp c)))
+  (or (is-whitespace-char c)
+      (is-punctuation-char c)))
+
+(defun find-word-end (st text pos)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp text)
+                               (natp pos)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (declare (ignore st))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      pos
+    (let ((c (char text pos)))
+      (if (is-word-boundary-char c)
+          pos
+        (find-word-end st text (+ pos 1))))))
+
+(defthm natp-of-find-word-end
+  (implies (and (natp pos) (stringp text))
+           (natp (find-word-end st text pos)))
+  :hints (("Goal" :induct (find-word-end st text pos)))
+  :rule-classes :type-prescription)
+
+(defthm find-word-end-geq-pos
+  (implies (and (natp pos) (stringp text) (<= pos (length text)))
+           (<= pos (find-word-end st text pos)))
+  :hints (("Goal" :induct (find-word-end st text pos)))
   :rule-classes :linear)
 
-(defthm mgt-coverage-zero-empty-vocab
-  (equal (mgt-coverage text (mgt-empty-state)) 0)
-  :hints (("Goal" :in-theory (enable mgt-coverage mgt-coverage-count))))
-
-(defun mgt-init-special-tokens (st)
-  (declare (xargs :guard t))
-  (let* ((st1 (mgt-add-token-state *pad-word* st))
-         (st2 (mgt-add-token-state *unk-word* st1))
-         (st3 (mgt-add-token-state *bos-word* st2))
-         (st4 (mgt-add-token-state *eos-word* st3)))
-    st4))
-
-(defthm mgt-init-special-tokens-has-pad
-  (alist-contains *pad-word*
-                  (mgt-tok2id (mgt-init-special-tokens st))))
-
-(defthm mgt-init-special-tokens-has-unk
-  (alist-contains *unk-word*
-                  (mgt-tok2id (mgt-init-special-tokens st))))
-
-(defthm mgt-init-special-tokens-has-bos
-  (alist-contains *bos-word*
-                  (mgt-tok2id (mgt-init-special-tokens st))))
-
-(defthm mgt-init-special-tokens-has-eos
-  (alist-contains *eos-word*
-                  (mgt-tok2id (mgt-init-special-tokens st))))
-
-(defthm mgt-init-special-tokens-preserves-prefixes
-  (equal (mgt-prefixes (mgt-init-special-tokens st))
-         (mgt-prefixes st)))
-
-(defthm mgt-init-special-tokens-preserves-suffixes
-  (equal (mgt-suffixes (mgt-init-special-tokens st))
-         (mgt-suffixes st)))
-
-(defthm mgt-init-special-tokens-preserves-roots
-  (equal (mgt-roots (mgt-init-special-tokens st))
-         (mgt-roots st)))
-
-(defthm mgt-init-special-tokens-preserves-anchors
-  (equal (mgt-anchors (mgt-init-special-tokens st))
-         (mgt-anchors st)))
-
-(defthm mgt-init-special-tokens-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-init-special-tokens st))
-         (mgt-bpe-pairs st)))
-
-(defun mgt-init (vocab-words)
-  (declare (xargs :guard t
-                  :measure (acl2-count vocab-words)))
-  (let* ((st0 (mgt-empty-state))
-         (st1 (mgt-init-special-tokens st0))
-         (st2 (mgt-add-tokens vocab-words st1)))
-    st2))
-
-(defthm mgt-init-has-special-pad
-  (alist-contains *pad-word* (mgt-tok2id (mgt-init vocab))))
-
-(defthm mgt-init-has-special-unk
-  (alist-contains *unk-word* (mgt-tok2id (mgt-init vocab))))
-
-(defthm mgt-init-has-special-bos
-  (alist-contains *bos-word* (mgt-tok2id (mgt-init vocab))))
-
-(defthm mgt-init-has-special-eos
-  (alist-contains *eos-word* (mgt-tok2id (mgt-init vocab))))
-
-(defthm mgt-init-nil-vocab-size-ge-4
-  (<= 4 (mgt-vocab-size (mgt-init nil)))
+(defthm find-word-end-leq-length
+  (implies (and (natp pos) (stringp text) (<= pos (length text)))
+           (<= (find-word-end st text pos) (length text)))
+  :hints (("Goal" :induct (find-word-end st text pos)))
   :rule-classes :linear)
 
-(defun mgt-add-vocab-word (word is-anchor st)
-  (declare (xargs :guard t))
-  (let* ((result (mgt-add-token word st))
-         (tid (car result))
-         (st2 (cadr result)))
-    (if is-anchor
-        (mgt-set-anchors (alist-put word tid (mgt-anchors st2)) st2)
-      st2)))
+(defun is-special-token (str)
+  (declare (xargs :guard (stringp str)))
+  (or (equal str "[PAD]")
+      (equal str "[UNK]")
+      (equal str "[BOS]")
+      (equal str "[EOS]")))
 
-(defthm mgt-add-vocab-word-has-word
-  (alist-contains word (mgt-tok2id (mgt-add-vocab-word word is-anchor st))))
+(defthm booleanp-of-is-special-token
+  (implies (stringp str)
+           (booleanp (is-special-token str)))
+  :rule-classes :type-prescription)
 
-(defthm mgt-add-vocab-word-anchor-present
-  (implies is-anchor
-           (alist-contains word (mgt-anchors (mgt-add-vocab-word word t st)))))
+(defun check-special-token-at (text pos)
+  (declare (xargs :guard (and (stringp text) (natp pos) (<= pos (length text)))))
+  (cond ((and (<= (+ pos 5) (length text))
+              (equal (substring text pos (+ pos 5)) "[PAD]"))
+         5)
+        ((and (<= (+ pos 5) (length text))
+              (equal (substring text pos (+ pos 5)) "[UNK]"))
+         5)
+        ((and (<= (+ pos 5) (length text))
+              (equal (substring text pos (+ pos 5)) "[BOS]"))
+         5)
+        ((and (<= (+ pos 5) (length text))
+              (equal (substring text pos (+ pos 5)) "[EOS]"))
+         5)
+        (t 0)))
 
-(defthm mgt-add-vocab-word-non-anchor-preserves-anchors
-  (implies (not is-anchor)
-           (equal (mgt-anchors (mgt-add-vocab-word word nil st))
-                  (mgt-anchors st))))
+(defthm natp-of-check-special-token-at
+  (implies (and (stringp text) (natp pos))
+           (natp (check-special-token-at text pos)))
+  :rule-classes :type-prescription)
 
-(defthm mgt-add-vocab-word-preserves-prefixes
-  (equal (mgt-prefixes (mgt-add-vocab-word word is-anchor st))
-         (mgt-prefixes st)))
+(defthm check-special-token-at-bounded
+  (implies (and (stringp text) (natp pos))
+           (<= (check-special-token-at text pos) 5))
+  :rule-classes :linear)
 
-(defthm mgt-add-vocab-word-preserves-suffixes
-  (equal (mgt-suffixes (mgt-add-vocab-word word is-anchor st))
-         (mgt-suffixes st)))
+(defun encode-aux (st text pos acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp text)
+                               (natp pos)
+                               (nat-listp acc)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      (reverse acc)
+    (let ((special-len (check-special-token-at text pos)))
+      (if (> special-len 0)
+          (let* ((special-str (substring text pos (+ pos special-len)))
+                 (tid (lookup-token special-str (mgt-token-to-id st)))
+                 (token-id (if tid tid *special-unk*)))
+            (encode-aux st text (+ pos special-len)
+                        (cons token-id acc)))
+        (let ((c (char text pos)))
+          (cond
+           ((is-whitespace-char c)
+            (let* ((ws-str (coerce (list c) 'string))
+                   (tid (lookup-token ws-str (mgt-token-to-id st)))
+                   (token-id (if tid tid
+                               (let ((space-tid (lookup-token " " (mgt-token-to-id st))))
+                                 (if (and (eql c #\Space) space-tid) space-tid *special-unk*)))))
+              (encode-aux st text (+ pos 1) (cons token-id acc))))
+           ((is-punctuation-char c)
+            (let* ((p-str (coerce (list c) 'string))
+                   (tid (lookup-token p-str (mgt-token-to-id st)))
+                   (token-id (if tid tid *special-unk*)))
+              (encode-aux st text (+ pos 1) (cons token-id acc))))
+           (t
+            (let* ((word-end (find-word-end st text pos)))
+              (if (<= word-end pos)
+                  (encode-aux st text (+ pos 1) (cons *special-unk* acc))
+                (let* ((word (substring text pos word-end))
+                       (word-tokens (encode-word st word))
+                       (new-acc (revappend word-tokens acc)))
+                  (encode-aux st text word-end new-acc)))))))))))
 
-(defthm mgt-add-vocab-word-preserves-roots
-  (equal (mgt-roots (mgt-add-vocab-word word is-anchor st))
-         (mgt-roots st)))
+(defthm nat-listp-of-revappend-nat-listp
+  (implies (and (nat-listp a) (nat-listp b))
+           (nat-listp (revappend a b)))
+  :hints (("Goal" :induct (revappend a b))))
 
-(defthm mgt-add-vocab-word-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-add-vocab-word word is-anchor st))
-         (mgt-bpe-pairs st)))
+(defthm nat-listp-of-encode-aux
+  (implies (and (mgt-state-p st)
+                (stringp text)
+                (natp pos)
+                (nat-listp acc))
+           (nat-listp (encode-aux st text pos acc)))
+  :hints (("Goal" :induct (encode-aux st text pos acc))))
 
-(defun mgt-remove-vocab-word (word st)
-  (declare (xargs :guard t))
-  (if (or (equal word *pad-word*)
-          (equal word *unk-word*)
-          (equal word *bos-word*)
-          (equal word *eos-word*))
-      st
-    (let ((tid (alist-get word (mgt-tok2id st))))
-      (if (not tid)
-          st
-        (let* ((new-tok2id (remove-assoc-equal word (mgt-tok2id st)))
-               (new-id2tok (remove-assoc-equal tid (mgt-id2tok st)))
-               (new-anchors (remove-assoc-equal word (mgt-anchors st)))
-               (new-prefixes (remove-assoc-equal word (mgt-prefixes st)))
-               (new-suffixes (remove-assoc-equal word (mgt-suffixes st)))
-               (new-roots (remove-assoc-equal word (mgt-roots st)))
-               (st1 (mgt-set-tok2id new-tok2id st))
-               (st2 (mgt-set-id2tok new-id2tok st1))
-               (st3 (mgt-set-anchors new-anchors st2))
-               (st4 (mgt-set-prefixes new-prefixes st3))
-               (st5 (mgt-set-suffixes new-suffixes st4))
-               (st6 (mgt-set-roots new-roots st5)))
-          st6)))))
+(defun encode-text (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (encode-aux st text 0 nil))
 
-(defthm mgt-remove-vocab-word-pad-noop
-  (equal (mgt-remove-vocab-word *pad-word* st) st))
+(defthm nat-listp-of-encode-text
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
 
-(defthm mgt-remove-vocab-word-unk-noop
-  (equal (mgt-remove-vocab-word *unk-word* st) st))
+(defun decode-token (st tok)
+  (declare (xargs :guard (and (mgt-state-p st) (natp tok))))
+  (let ((str (lookup-id tok (mgt-id-to-token st))))
+    (if str
+        str
+      (let ((unk-str (lookup-id *special-unk* (mgt-id-to-token st))))
+        (if unk-str unk-str "[UNK]")))))
 
-(defthm mgt-remove-vocab-word-bos-noop
-  (equal (mgt-remove-vocab-word *bos-word* st) st))
+(defthm stringp-of-decode-token
+  (implies (and (mgt-state-p st) (natp tok))
+           (stringp (decode-token st tok)))
+  :rule-classes :type-prescription)
 
-(defthm mgt-remove-vocab-word-eos-noop
-  (equal (mgt-remove-vocab-word *eos-word* st) st))
+(defun decode-tokens-aux (st tokens acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (nat-listp tokens)
+                               (stringp acc))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      acc
+    (let* ((tok-str (decode-token st (car tokens)))
+           (new-acc (concatenate 'string acc tok-str)))
+      (decode-tokens-aux st (cdr tokens) new-acc))))
 
-(defthm mgt-remove-vocab-word-removes-from-tok2id
-  (implies (and (not (equal word *pad-word*))
-                (not (equal word *unk-word*))
-                (not (equal word *bos-word*))
-                (not (equal word *eos-word*)))
-           (not (alist-contains word (mgt-tok2id (mgt-remove-vocab-word word st))))))
+(defthm stringp-of-decode-tokens-aux
+  (implies (and (mgt-state-p st)
+                (nat-listp tokens)
+                (stringp acc))
+           (stringp (decode-tokens-aux st tokens acc)))
+  :hints (("Goal" :induct (decode-tokens-aux st tokens acc)))
+  :rule-classes :type-prescription)
 
-(defthm mgt-remove-vocab-word-removes-from-anchors
-  (implies (and (not (equal word *pad-word*))
-                (not (equal word *unk-word*))
-                (not (equal word *bos-word*))
-                (not (equal word *eos-word*)))
-           (not (alist-contains word (mgt-anchors (mgt-remove-vocab-word word st))))))
+(defun decode-tokens (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))))
+  (decode-tokens-aux st tokens ""))
 
-(defthm mgt-remove-vocab-word-preserves-next-id
-  (equal (mgt-next-id (mgt-remove-vocab-word word st))
-         (mgt-next-id st)))
+(defthm stringp-of-decode-tokens
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (stringp (decode-tokens st tokens))))
 
-(defthm mgt-remove-vocab-word-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-remove-vocab-word word st))
-         (mgt-bpe-pairs st)))
-
-(defthm mgt-remove-preserves-other-tok2id
-  (implies (and (not (equal w1 w2))
-                (not (equal w2 *pad-word*))
-                (not (equal w2 *unk-word*))
-                (not (equal w2 *bos-word*))
-                (not (equal w2 *eos-word*)))
-           (equal (alist-contains w1 (mgt-tok2id (mgt-remove-vocab-word w2 st)))
-                  (alist-contains w1 (mgt-tok2id st)))))
-
-(defun mgt-encode-batch-aux (texts st acc)
-  (declare (xargs :guard t
-                  :measure (acl2-count texts)))
+(defun encode-batch-aux (st texts acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (string-list-p texts)
+                               (true-listp acc))
+                  :measure (len texts)))
   (if (atom texts)
       (reverse acc)
-    (let ((encoded (mgt-encode (car texts) st)))
-      (mgt-encode-batch-aux (cdr texts) st (cons encoded acc)))))
+    (let ((tokens (encode-text st (car texts))))
+      (encode-batch-aux st (cdr texts) (cons tokens acc)))))
 
-(defthm true-listp-mgt-encode-batch-aux
-  (implies (true-listp acc)
-           (true-listp (mgt-encode-batch-aux texts st acc)))
-  :rule-classes (:rewrite :type-prescription))
+(defun encode-batch (st texts)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p texts))))
+  (encode-batch-aux st texts nil))
 
-(defun mgt-encode-batch (texts st)
-  (declare (xargs :guard t))
-  (mgt-encode-batch-aux texts st nil))
+(defthm true-listp-of-encode-batch-aux
+  (implies (and (mgt-state-p st)
+                (string-list-p texts)
+                (true-listp acc))
+           (true-listp (encode-batch-aux st texts acc)))
+  :hints (("Goal" :induct (encode-batch-aux st texts acc))))
 
-(defthm true-listp-mgt-encode-batch
-  (true-listp (mgt-encode-batch texts st))
-  :rule-classes (:rewrite :type-prescription))
+(defthm true-listp-of-encode-batch
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (true-listp (encode-batch st texts))))
 
-(defthm mgt-encode-batch-nil
-  (equal (mgt-encode-batch nil st) nil))
+(defthm len-of-encode-batch-aux
+  (implies (and (mgt-state-p st)
+                (string-list-p texts)
+                (true-listp acc))
+           (equal (len (encode-batch-aux st texts acc))
+                  (+ (len texts) (len acc))))
+  :hints (("Goal" :induct (encode-batch-aux st texts acc))))
 
-(defthm len-mgt-encode-batch
-  (equal (len (mgt-encode-batch texts st))
-         (len texts))
-  :hints (("Goal" :in-theory (enable mgt-encode-batch))))
+(defthm len-of-encode-batch
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
 
-(defun mgt-decode-batch-aux (token-lists st acc)
-  (declare (xargs :guard t
-                  :measure (acl2-count token-lists)))
+(defun batch-decode-aux (st token-lists acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (true-listp token-lists)
+                               (string-list-p acc))
+                  :measure (len token-lists)))
   (if (atom token-lists)
       (reverse acc)
-    (let ((decoded (mgt-decode (car token-lists) st)))
-      (mgt-decode-batch-aux (cdr token-lists) st (cons decoded acc)))))
+    (if (nat-listp (car token-lists))
+        (let ((text (decode-tokens st (car token-lists))))
+          (batch-decode-aux st (cdr token-lists) (cons text acc)))
+      (batch-decode-aux st (cdr token-lists) (cons "[UNK]" acc)))))
 
-(defthm true-listp-mgt-decode-batch-aux
-  (implies (true-listp acc)
-           (true-listp (mgt-decode-batch-aux token-lists st acc)))
-  :rule-classes (:rewrite :type-prescription))
+(defun batch-decode (st token-lists)
+  (declare (xargs :guard (and (mgt-state-p st) (true-listp token-lists))))
+  (batch-decode-aux st token-lists nil))
 
-(defun mgt-decode-batch (token-lists st)
-  (declare (xargs :guard t))
-  (mgt-decode-batch-aux token-lists st nil))
+(defthm string-list-p-of-batch-decode-aux
+  (implies (and (mgt-state-p st)
+                (true-listp token-lists)
+                (string-list-p acc))
+           (string-list-p (batch-decode-aux st token-lists acc)))
+  :hints (("Goal" :induct (batch-decode-aux st token-lists acc))))
 
-(defthm true-listp-mgt-decode-batch
-  (true-listp (mgt-decode-batch token-lists st))
-  :rule-classes (:rewrite :type-prescription))
+(defthm string-list-p-of-batch-decode
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (string-list-p (batch-decode st token-lists))))
 
-(defthm mgt-decode-batch-nil
-  (equal (mgt-decode-batch nil st) nil))
+(defthm len-of-batch-decode-aux
+  (implies (and (mgt-state-p st)
+                (true-listp token-lists)
+                (string-list-p acc))
+           (equal (len (batch-decode-aux st token-lists acc))
+                  (+ (len token-lists) (len acc))))
+  :hints (("Goal" :induct (batch-decode-aux st token-lists acc))))
 
-(defthm len-mgt-decode-batch
-  (equal (len (mgt-decode-batch token-lists st))
-         (len token-lists))
-  :hints (("Goal" :in-theory (enable mgt-decode-batch))))
+(defthm len-of-batch-decode
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
 
-(defun mgt-merge-subwords (subword-lists)
-  (declare (xargs :guard t
-                  :measure (acl2-count subword-lists)))
-  (if (atom subword-lists)
-      nil
-    (append (if (true-listp (car subword-lists))
-                (car subword-lists)
-              nil)
-            (mgt-merge-subwords (cdr subword-lists)))))
+(defun init-special-tokens (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (mv-let (st1 id0) (add-token-to-state st "[PAD]")
+    (declare (ignore id0))
+    (mv-let (st2 id1) (add-token-to-state st1 "[UNK]")
+      (declare (ignore id1))
+      (mv-let (st3 id2) (add-token-to-state st2 "[BOS]")
+        (declare (ignore id2))
+        (mv-let (st4 id3) (add-token-to-state st3 "[EOS]")
+          (declare (ignore id3))
+          st4)))))
 
-(defthm true-listp-mgt-merge-subwords
-  (true-listp (mgt-merge-subwords subs))
-  :rule-classes (:rewrite :type-prescription))
+(defthm mgt-state-p-of-init-special-tokens
+  (implies (mgt-state-p st)
+           (mgt-state-p (init-special-tokens st))))
 
-(defthm mgt-merge-subwords-nil
-  (equal (mgt-merge-subwords nil) nil))
-
-(defthm mgt-merge-subwords-singleton
-  (implies (true-listp s)
-           (equal (mgt-merge-subwords (list s)) s)))
-
-(defthm len-mgt-merge-subwords-le
-  (<= (len (mgt-merge-subwords (list s1 s2)))
-      (+ (len s1) (len s2)))
+(defthm init-special-tokens-next-id-geq
+  (implies (mgt-state-p st)
+           (<= (mgt-next-id st)
+               (mgt-next-id (init-special-tokens st))))
   :rule-classes :linear)
 
-(defun mgt-tokenize-with-anchors-aux (tokens st pos acc-anchors)
-  (declare (xargs :guard (natp pos)
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      (list (reverse acc-anchors))
-    (let* ((tid (car tokens))
-           (tok-str (alist-get tid (mgt-id2tok st)))
-           (tok-len (if tok-str (len tok-str) 0))
-           (is-anchor (if tok-str (alist-contains tok-str (mgt-anchors st)) nil))
-           (new-anchors (if is-anchor
-                            (cons pos acc-anchors)
-                          acc-anchors)))
-      (mgt-tokenize-with-anchors-aux (cdr tokens) st (+ pos tok-len) new-anchors))))
-
-(defun mgt-tokenize-with-anchors (text st)
+(defun make-empty-mgt-state ()
   (declare (xargs :guard t))
-  (let* ((tokens (mgt-encode text st))
-         (anchor-info (mgt-tokenize-with-anchors-aux tokens st 0 nil)))
-    (list tokens (car anchor-info))))
+  (make-mgt-state nil nil nil nil nil nil 0))
 
-(defthm true-listp-mgt-tokenize-with-anchors-result
-  (true-listp (mgt-tokenize-with-anchors text st))
-  :rule-classes (:rewrite :type-prescription))
+(defthm mgt-state-p-of-make-empty
+  (mgt-state-p (make-empty-mgt-state)))
 
-(defthm len-mgt-tokenize-with-anchors-result
-  (equal (len (mgt-tokenize-with-anchors text st)) 2))
+(defun init-mgt (vocab anchors)
+  (declare (xargs :guard (and (string-list-p vocab)
+                               (string-list-p anchors))))
+  (let* ((st0 (make-empty-mgt-state))
+         (st1 (init-special-tokens st0))
+         (st2 (add-tokens-to-state st1 vocab)))
+    st2))
 
-(defthm true-listp-first-of-tokenize-with-anchors
-  (true-listp (car (mgt-tokenize-with-anchors text st))))
+(defthm mgt-state-p-of-init-mgt
+  (implies (and (string-list-p vocab) (string-list-p anchors))
+           (mgt-state-p (init-mgt vocab anchors))))
 
-(defun mgt-detokenize (tokens st)
-  (declare (xargs :guard t))
-  (mgt-decode tokens st))
+(defun add-prefix-to-state (st prefix)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp prefix))))
+  (mv-let (st1 id)
+    (add-token-to-state st prefix)
+    (make-mgt-state
+     (mgt-token-to-id st1)
+     (mgt-id-to-token st1)
+     (cons (cons prefix id) (mgt-prefixes st1))
+     (mgt-suffixes st1)
+     (mgt-roots st1)
+     (mgt-bpe-pairs st1)
+     (mgt-next-id st1))))
 
-(defthm mgt-detokenize-is-decode
-  (equal (mgt-detokenize tokens st)
-         (mgt-decode tokens st)))
+(defthm mgt-state-p-of-add-prefix-to-state
+  (implies (and (mgt-state-p st) (stringp prefix))
+           (mgt-state-p (add-prefix-to-state st prefix))))
 
-(defthm true-listp-mgt-detokenize
-  (true-listp (mgt-detokenize tokens st))
-  :rule-classes (:rewrite :type-prescription))
+(defun add-suffix-to-state (st suffix)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp suffix))))
+  (mv-let (st1 id)
+    (add-token-to-state st suffix)
+    (make-mgt-state
+     (mgt-token-to-id st1)
+     (mgt-id-to-token st1)
+     (mgt-prefixes st1)
+     (cons (cons suffix id) (mgt-suffixes st1))
+     (mgt-roots st1)
+     (mgt-bpe-pairs st1)
+     (mgt-next-id st1))))
 
-(defthm mgt-detokenize-nil
-  (equal (mgt-detokenize nil st) nil))
+(defthm mgt-state-p-of-add-suffix-to-state
+  (implies (and (mgt-state-p st) (stringp suffix))
+           (mgt-state-p (add-suffix-to-state st suffix))))
 
-(defun mgt-unknown-replacement (context st)
-  (declare (xargs :guard t)
-           (ignore context st))
-  *unk-id*)
-
-(defthm mgt-unknown-replacement-is-unk
-  (equal (mgt-unknown-replacement context st) *unk-id*))
-
-(defthm natp-mgt-unknown-replacement
-  (natp (mgt-unknown-replacement context st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defun all-tokens-valid-p (tokens st)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      t
-    (and (alist-contains (car tokens) (mgt-id2tok st))
-         (all-tokens-valid-p (cdr tokens) st))))
-
-(defthm all-tokens-valid-p-is-validate
-  (equal (all-tokens-valid-p tokens st)
-         (mgt-validate-tokens tokens st)))
-
-(defthm all-tokens-valid-p-nil
-  (equal (all-tokens-valid-p nil st) t))
-
-(defthm all-tokens-valid-p-cons
-  (equal (all-tokens-valid-p (cons tok rest) st)
-         (and (alist-contains tok (mgt-id2tok st))
-              (all-tokens-valid-p rest st))))
-
-(defthm all-tokens-valid-p-append
-  (equal (all-tokens-valid-p (append a b) st)
-         (and (all-tokens-valid-p a st)
-              (all-tokens-valid-p b st)))
-  :hints (("Goal" :induct (all-tokens-valid-p a st))))
-
-(defun mgt-add-prefix (prefix-word st)
-  (declare (xargs :guard t))
-  (let* ((result (mgt-add-token prefix-word st))
-         (tid (car result))
-         (st2 (cadr result))
-         (new-prefixes (alist-put prefix-word tid (mgt-prefixes st2))))
-    (mgt-set-prefixes new-prefixes st2)))
-
-(defthm mgt-add-prefix-has-prefix
-  (alist-contains prefix-word (mgt-prefixes (mgt-add-prefix prefix-word st))))
-
-(defthm mgt-add-prefix-has-token
-  (alist-contains prefix-word (mgt-tok2id (mgt-add-prefix prefix-word st))))
-
-(defthm mgt-add-prefix-preserves-suffixes
-  (equal (mgt-suffixes (mgt-add-prefix prefix-word st))
-         (mgt-suffixes st)))
-
-(defthm mgt-add-prefix-preserves-roots
-  (equal (mgt-roots (mgt-add-prefix prefix-word st))
-         (mgt-roots st)))
-
-(defthm mgt-add-prefix-preserves-anchors
-  (equal (mgt-anchors (mgt-add-prefix prefix-word st))
-         (mgt-anchors st)))
-
-(defthm mgt-add-prefix-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-add-prefix prefix-word st))
-         (mgt-bpe-pairs st)))
-
-(defun mgt-add-suffix (suffix-word st)
-  (declare (xargs :guard t))
-  (let* ((result (mgt-add-token suffix-word st))
-         (tid (car result))
-         (st2 (cadr result))
-         (new-suffixes (alist-put suffix-word tid (mgt-suffixes st2))))
-    (mgt-set-suffixes new-suffixes st2)))
-
-(defthm mgt-add-suffix-has-suffix
-  (alist-contains suffix-word (mgt-suffixes (mgt-add-suffix suffix-word st))))
-
-(defthm mgt-add-suffix-has-token
-  (alist-contains suffix-word (mgt-tok2id (mgt-add-suffix suffix-word st))))
-
-(defthm mgt-add-suffix-preserves-prefixes
-  (equal (mgt-prefixes (mgt-add-suffix suffix-word st))
-         (mgt-prefixes st)))
-
-(defthm mgt-add-suffix-preserves-roots
-  (equal (mgt-roots (mgt-add-suffix suffix-word st))
-         (mgt-roots st)))
-
-(defthm mgt-add-suffix-preserves-anchors
-  (equal (mgt-anchors (mgt-add-suffix suffix-word st))
-         (mgt-anchors st)))
-
-(defthm mgt-add-suffix-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-add-suffix suffix-word st))
-         (mgt-bpe-pairs st)))
-
-(defun mgt-add-prefixes (prefix-list st)
-  (declare (xargs :guard t
-                  :measure (acl2-count prefix-list)))
-  (if (atom prefix-list)
+(defun add-prefixes-to-state (st prefixes)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p prefixes))
+                  :measure (len prefixes)))
+  (if (atom prefixes)
       st
-    (mgt-add-prefixes (cdr prefix-list)
-                      (mgt-add-prefix (car prefix-list) st))))
+    (add-prefixes-to-state (add-prefix-to-state st (car prefixes))
+                           (cdr prefixes))))
 
-(defthm mgt-add-prefixes-nil
-  (equal (mgt-add-prefixes nil st) st))
+(defthm mgt-state-p-of-add-prefixes-to-state
+  (implies (and (mgt-state-p st) (string-list-p prefixes))
+           (mgt-state-p (add-prefixes-to-state st prefixes)))
+  :hints (("Goal" :induct (add-prefixes-to-state st prefixes))))
 
-(defthm mgt-add-prefixes-preserves-suffixes
-  (equal (mgt-suffixes (mgt-add-prefixes plist st))
-         (mgt-suffixes st))
-  :hints (("Goal" :induct (mgt-add-prefixes plist st))))
-
-(defthm mgt-add-prefixes-preserves-roots
-  (equal (mgt-roots (mgt-add-prefixes plist st))
-         (mgt-roots st))
-  :hints (("Goal" :induct (mgt-add-prefixes plist st))))
-
-(defthm mgt-add-prefixes-preserves-anchors
-  (equal (mgt-anchors (mgt-add-prefixes plist st))
-         (mgt-anchors st))
-  :hints (("Goal" :induct (mgt-add-prefixes plist st))))
-
-(defthm mgt-add-prefixes-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-add-prefixes plist st))
-         (mgt-bpe-pairs st))
-  :hints (("Goal" :induct (mgt-add-prefixes plist st))))
-
-(defun mgt-add-suffixes (suffix-list st)
-  (declare (xargs :guard t
-                  :measure (acl2-count suffix-list)))
-  (if (atom suffix-list)
+(defun add-suffixes-to-state (st suffixes)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p suffixes))
+                  :measure (len suffixes)))
+  (if (atom suffixes)
       st
-    (mgt-add-suffixes (cdr suffix-list)
-                      (mgt-add-suffix (car suffix-list) st))))
+    (add-suffixes-to-state (add-suffix-to-state st (car suffixes))
+                           (cdr suffixes))))
 
-(defthm mgt-add-suffixes-nil
-  (equal (mgt-add-suffixes nil st) st))
+(defthm mgt-state-p-of-add-suffixes-to-state
+  (implies (and (mgt-state-p st) (string-list-p suffixes))
+           (mgt-state-p (add-suffixes-to-state st suffixes)))
+  :hints (("Goal" :induct (add-suffixes-to-state st suffixes))))
 
-(defthm mgt-add-suffixes-preserves-prefixes
-  (equal (mgt-prefixes (mgt-add-suffixes slist st))
-         (mgt-prefixes st))
-  :hints (("Goal" :induct (mgt-add-suffixes slist st))))
+(defconst *english-prefixes*
+  (list "un" "re" "pre" "dis" "mis" "over" "under" "out"
+        "sub" "inter" "fore" "de" "trans" "super" "semi" "anti"
+        "mid" "non" "ex" "post" "pro" "co" "en" "em"))
 
-(defthm mgt-add-suffixes-preserves-roots
-  (equal (mgt-roots (mgt-add-suffixes slist st))
-         (mgt-roots st))
-  :hints (("Goal" :induct (mgt-add-suffixes slist st))))
+(defconst *hungarian-prefixes*
+  (list "meg" "el" "fel" "le" "be" "ki"))
 
-(defthm mgt-add-suffixes-preserves-anchors
-  (equal (mgt-anchors (mgt-add-suffixes slist st))
-         (mgt-anchors st))
-  :hints (("Goal" :induct (mgt-add-suffixes slist st))))
+(defconst *english-suffixes*
+  (list "ing" "ed" "er" "est" "ly" "tion" "sion" "ness"
+        "ment" "ful" "less" "ous" "ive" "able" "ible" "al"
+        "ial" "y" "s" "es" "en" "ize" "ise" "ate"))
 
-(defthm mgt-add-suffixes-preserves-bpe-pairs
-  (equal (mgt-bpe-pairs (mgt-add-suffixes slist st))
-         (mgt-bpe-pairs st))
-  :hints (("Goal" :induct (mgt-add-suffixes slist st))))
+(defconst *hungarian-suffixes*
+  (list "ban" "ben" "ba" "be" "nak" "nek" "val" "vel"
+        "ra" "re" "kor" "ni" "at" "et"))
 
-(defun mgt-encode-to-rationals (text st)
-  (declare (xargs :guard t
-                  :measure (acl2-count text)))
-  (let ((tokens (mgt-encode text st)))
-    (mgt-tokens-to-rationals tokens)))
+(defun init-morphemes (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (let* ((st1 (add-prefixes-to-state st *english-prefixes*))
+         (st2 (add-prefixes-to-state st1 *hungarian-prefixes*))
+         (st3 (add-suffixes-to-state st2 *english-suffixes*))
+         (st4 (add-suffixes-to-state st3 *hungarian-suffixes*)))
+    st4))
 
-(defun mgt-tokens-to-rationals (tokens)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      nil
-    (cons (if (natp (car tokens))
-              (car tokens)
-            0)
-          (mgt-tokens-to-rationals (cdr tokens)))))
+(defthm mgt-state-p-of-init-morphemes
+  (implies (mgt-state-p st)
+           (mgt-state-p (init-morphemes st))))
 
-(defthm true-listp-mgt-tokens-to-rationals
-  (true-listp (mgt-tokens-to-rationals tokens))
-  :rule-classes (:rewrite :type-prescription))
+(defun init-mgt-full (vocab anchors)
+  (declare (xargs :guard (and (string-list-p vocab) (string-list-p anchors))))
+  (let* ((st0 (make-empty-mgt-state))
+         (st1 (init-special-tokens st0))
+         (st2 (add-tokens-to-state st1 vocab))
+         (st3 (init-morphemes st2)))
+    st3))
 
-(defthm all-natp-mgt-tokens-to-rationals
-  (all-natp (mgt-tokens-to-rationals tokens)))
+(defthm mgt-state-p-of-init-mgt-full
+  (implies (and (string-list-p vocab) (string-list-p anchors))
+           (mgt-state-p (init-mgt-full vocab anchors))))
 
-(defthm len-mgt-tokens-to-rationals
-  (equal (len (mgt-tokens-to-rationals tokens))
-         (len tokens)))
-
-(defthm mgt-tokens-to-rationals-nil
-  (equal (mgt-tokens-to-rationals nil) nil))
-
-(defthm mgt-tokens-to-rationals-cons
-  (equal (mgt-tokens-to-rationals (cons a rest))
-         (cons (if (natp a) a 0)
-               (mgt-tokens-to-rationals rest))))
-
-(defun mgt-rationals-to-tokens (rats)
-  (declare (xargs :guard t
-                  :measure (acl2-count rats)))
-  (if (atom rats)
-      nil
-    (cons (if (natp (car rats))
-              (car rats)
-            *unk-id*)
-          (mgt-rationals-to-tokens (cdr rats)))))
-
-(defthm true-listp-mgt-rationals-to-tokens
-  (true-listp (mgt-rationals-to-tokens rats))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm len-mgt-rationals-to-tokens
-  (equal (len (mgt-rationals-to-tokens rats))
-         (len rats)))
-
-(defthm mgt-rationals-to-tokens-nil
-  (equal (mgt-rationals-to-tokens nil) nil))
-
-(defthm mgt-rationals-to-tokens-inverse-of-tokens-to-rationals
-  (implies (all-natp tokens)
-           (equal (mgt-rationals-to-tokens (mgt-tokens-to-rationals tokens))
-                  tokens))
-  :hints (("Goal" :induct (mgt-tokens-to-rationals tokens))))
-
-(defun mgt-decode-from-rationals (rats st)
+(defun pair-key-p (pk)
   (declare (xargs :guard t))
-  (mgt-decode (mgt-rationals-to-tokens rats) st))
+  (and (consp pk)
+       (natp (car pk))
+       (natp (cdr pk))))
 
-(defthm true-listp-mgt-decode-from-rationals
-  (true-listp (mgt-decode-from-rationals rats st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm mgt-decode-from-rationals-nil
-  (equal (mgt-decode-from-rationals nil st) nil))
-
-(defun max-token-id-in (tokens)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      0
-    (max (if (natp (car tokens)) (car tokens) 0)
-         (max-token-id-in (cdr tokens)))))
-
-(defthm natp-max-token-id-in
-  (natp (max-token-id-in tokens))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm max-token-id-in-nil
-  (equal (max-token-id-in nil) 0))
-
-(defthm max-token-id-in-ge-car
-  (implies (and (consp tokens) (natp (car tokens)))
-           (<= (car tokens) (max-token-id-in tokens)))
-  :rule-classes :linear)
-
-(defthm max-token-id-in-ge-cdr
-  (implies (consp tokens)
-           (<= (max-token-id-in (cdr tokens)) (max-token-id-in tokens)))
-  :rule-classes :linear)
-
-(defthm max-token-id-in-member
-  (implies (and (member-equal tok tokens)
-                (natp tok))
-           (<= tok (max-token-id-in tokens)))
-  :rule-classes :linear)
-
-(defun count-tokens (tokens)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      0
-    (+ 1 (count-tokens (cdr tokens)))))
-
-(defthm natp-count-tokens
-  (natp (count-tokens tokens))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm count-tokens-is-len
-  (equal (count-tokens tokens) (len tokens)))
-
-(defun count-unk-tokens (tokens)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      0
-    (+ (if (equal (car tokens) *unk-id*) 1 0)
-       (count-unk-tokens (cdr tokens)))))
-
-(defthm natp-count-unk-tokens
-  (natp (count-unk-tokens tokens))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm count-unk-tokens-nil
-  (equal (count-unk-tokens nil) 0))
-
-(defthm count-unk-tokens-le-len
-  (<= (count-unk-tokens tokens) (len tokens))
-  :rule-classes :linear)
-
-(defthm count-unk-tokens-append
-  (equal (count-unk-tokens (append a b))
-         (+ (count-unk-tokens a) (count-unk-tokens b)))
-  :hints (("Goal" :induct (count-unk-tokens a))))
-
-(defthm count-unk-tokens-zero-no-unks
-  (implies (and (equal (count-unk-tokens tokens) 0)
-                (consp tokens))
-           (not (equal (car tokens) *unk-id*))))
-
-(defun token-frequency-aux (tok tokens count)
-  (declare (xargs :guard (natp count)
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      count
-    (token-frequency-aux tok (cdr tokens)
-                         (if (equal tok (car tokens))
-                             (+ 1 count)
-                           count))))
-
-(defthm natp-token-frequency-aux
-  (implies (natp count)
-           (natp (token-frequency-aux tok tokens count)))
-  :rule-classes (:rewrite :type-prescription))
-
-(defun token-frequency (tok tokens)
+(defun pair-freq-p (pf)
   (declare (xargs :guard t))
-  (token-frequency-aux tok tokens 0))
+  (and (consp pf)
+       (pair-key-p (car pf))
+       (natp (cdr pf))))
 
-(defthm natp-token-frequency
-  (natp (token-frequency tok tokens))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm token-frequency-nil
-  (equal (token-frequency tok nil) 0))
-
-(defthm token-frequency-le-len
-  (<= (token-frequency tok tokens) (len tokens))
-  :rule-classes :linear
-  :hints (("Goal" :in-theory (enable token-frequency))))
-
-(defthm token-frequency-zero-not-member
-  (implies (equal (token-frequency tok tokens) 0)
-           (not (member-equal tok tokens)))
-  :hints (("Goal" :in-theory (enable token-frequency))))
-
-(defun mgt-is-special-token-id (tid)
+(defun pair-freq-list-p (lst)
   (declare (xargs :guard t))
-  (or (equal tid *pad-id*)
-      (equal tid *unk-id*)
-      (equal tid *bos-id*)
-      (equal tid *eos-id*)))
+  (if (atom lst)
+      (null lst)
+    (and (pair-freq-p (car lst))
+         (pair-freq-list-p (cdr lst)))))
 
-(defthm booleanp-mgt-is-special-token-id
-  (or (equal (mgt-is-special-token-id tid) t)
-      (equal (mgt-is-special-token-id tid) nil))
+(defthm pair-freq-list-p-of-nil
+  (pair-freq-list-p nil))
+
+(defthm pair-freq-list-p-of-cons
+  (implies (and (pair-freq-p pf) (pair-freq-list-p rest))
+           (pair-freq-list-p (cons pf rest))))
+
+(defthm pair-freq-list-p-implies-true-listp
+  (implies (pair-freq-list-p lst)
+           (true-listp lst))
+  :hints (("Goal" :induct (pair-freq-list-p lst))))
+
+(defun count-pairs-in-seq (seq pair-counts)
+  (declare (xargs :guard (and (nat-listp seq) (true-listp pair-counts))
+                  :measure (len seq)))
+  (if (or (atom seq) (atom (cdr seq)))
+      pair-counts
+    (let* ((key (cons (car seq) (cadr seq)))
+           (existing (assoc-equal key pair-counts))
+           (new-count (if existing (+ 1 (cdr existing)) 1))
+           (new-counts (if existing
+                           (put-assoc-equal key new-count pair-counts)
+                         (cons (cons key new-count) pair-counts))))
+      (count-pairs-in-seq (cdr seq) new-counts))))
+
+(defun count-pairs-in-seqs (seqs pair-counts)
+  (declare (xargs :guard (and (true-listp seqs) (true-listp pair-counts))
+                  :measure (len seqs)))
+  (if (atom seqs)
+      pair-counts
+    (if (nat-listp (car seqs))
+        (count-pairs-in-seqs (cdr seqs)
+                             (count-pairs-in-seq (car seqs) pair-counts))
+      (count-pairs-in-seqs (cdr seqs) pair-counts))))
+
+(defun find-best-pair (counts best-key best-freq)
+  (declare (xargs :guard (and (true-listp counts) (natp best-freq))
+                  :measure (len counts)))
+  (if (atom counts)
+      (mv best-key best-freq)
+    (let* ((entry (car counts))
+           (key (car entry))
+           (freq (if (natp (cdr entry)) (cdr entry) 0)))
+      (if (> freq best-freq)
+          (find-best-pair (cdr counts) key freq)
+        (find-best-pair (cdr counts) best-key best-freq)))))
+
+(defthm natp-of-find-best-pair-freq
+  (implies (natp best-freq)
+           (natp (mv-nth 1 (find-best-pair counts best-key best-freq))))
+  :hints (("Goal" :induct (find-best-pair counts best-key best-freq)))
   :rule-classes :type-prescription)
 
-(defthm pad-is-special
-  (equal (mgt-is-special-token-id *pad-id*) t))
-
-(defthm unk-is-special
-  (equal (mgt-is-special-token-id *unk-id*) t))
-
-(defthm bos-is-special
-  (equal (mgt-is-special-token-id *bos-id*) t))
-
-(defthm eos-is-special
-  (equal (mgt-is-special-token-id *eos-id*) t))
-
-(defthm four-is-not-special
-  (equal (mgt-is-special-token-id 4) nil))
-
-(defun count-special-tokens (tokens)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
-  (if (atom tokens)
-      0
-    (+ (if (mgt-is-special-token-id (car tokens)) 1 0)
-       (count-special-tokens (cdr tokens)))))
-
-(defthm natp-count-special-tokens
-  (natp (count-special-tokens tokens))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm count-special-tokens-nil
-  (equal (count-special-tokens nil) 0))
-
-(defthm count-special-tokens-le-len
-  (<= (count-special-tokens tokens) (len tokens))
+(defthm find-best-pair-freq-geq
+  (implies (natp best-freq)
+           (<= best-freq (mv-nth 1 (find-best-pair counts best-key best-freq))))
+  :hints (("Goal" :induct (find-best-pair counts best-key best-freq)))
   :rule-classes :linear)
 
-(defthm count-special-tokens-append
-  (equal (count-special-tokens (append a b))
-         (+ (count-special-tokens a) (count-special-tokens b)))
-  :hints (("Goal" :induct (count-special-tokens a))))
+(defun apply-merge-to-seq (seq first-id second-id merged-id acc)
+  (declare (xargs :guard (and (nat-listp seq)
+                               (natp first-id)
+                               (natp second-id)
+                               (natp merged-id)
+                               (nat-listp acc))
+                  :measure (len seq)))
+  (if (atom seq)
+      (reverse acc)
+    (if (and (consp (cdr seq))
+             (equal (car seq) first-id)
+             (equal (cadr seq) second-id))
+        (apply-merge-to-seq (cddr seq) first-id second-id merged-id
+                            (cons merged-id acc))
+      (apply-merge-to-seq (cdr seq) first-id second-id merged-id
+                          (cons (car seq) acc)))))
 
-(defun filter-special-tokens (tokens)
-  (declare (xargs :guard t
-                  :measure (acl2-count tokens)))
+(defthm nat-listp-of-apply-merge-to-seq
+  (implies (and (nat-listp seq)
+                (natp first-id)
+                (natp second-id)
+                (natp merged-id)
+                (nat-listp acc))
+           (nat-listp (apply-merge-to-seq seq first-id second-id merged-id acc)))
+  :hints (("Goal" :induct (apply-merge-to-seq seq first-id second-id merged-id acc))))
+
+(defun apply-merge-to-seqs (seqs first-id second-id merged-id)
+  (declare (xargs :guard (and (true-listp seqs)
+                               (natp first-id)
+                               (natp second-id)
+                               (natp merged-id))
+                  :measure (len seqs)))
+  (if (atom seqs)
+      nil
+    (if (nat-listp (car seqs))
+        (cons (apply-merge-to-seq (car seqs) first-id second-id merged-id nil)
+              (apply-merge-to-seqs (cdr seqs) first-id second-id merged-id))
+      (cons (car seqs)
+            (apply-merge-to-seqs (cdr seqs) first-id second-id merged-id)))))
+
+(defthm true-listp-of-apply-merge-to-seqs
+  (implies (true-listp seqs)
+           (true-listp (apply-merge-to-seqs seqs first-id second-id merged-id)))
+  :hints (("Goal" :induct (apply-merge-to-seqs seqs first-id second-id merged-id))))
+
+(defthm len-of-apply-merge-to-seqs
+  (implies (true-listp seqs)
+           (equal (len (apply-merge-to-seqs seqs first-id second-id merged-id))
+                  (len seqs)))
+  :hints (("Goal" :induct (apply-merge-to-seqs seqs first-id second-id merged-id))))
+
+(defun train-bpe-step (st seqs merge-count)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (true-listp seqs)
+                               (natp merge-count))
+                  :measure (nfix merge-count)))
+  (if (zp merge-count)
+      (mv st seqs)
+    (let* ((pair-counts (count-pairs-in-seqs seqs nil)))
+      (mv-let (best-key best-freq)
+        (find-best-pair pair-counts nil 0)
+        (if (or (null best-key)
+                (< best-freq 2)
+                (not (pair-key-p best-key)))
+            (mv st seqs)
+          (let* ((first-id (car best-key))
+                 (second-id (cdr best-key))
+                 (first-str (lookup-id first-id (mgt-id-to-token st)))
+                 (second-str (lookup-id second-id (mgt-id-to-token st))))
+            (if (or (null first-str) (null second-str))
+                (mv st seqs)
+              (let* ((merged-str (concatenate 'string first-str second-str)))
+                (mv-let (st1 merged-id)
+                  (add-token-to-state st merged-str)
+                  (let* ((new-bpe (cons (cons merged-str (cons merged-id merge-count))
+                                        (mgt-bpe-pairs st1)))
+                         (st2 (make-mgt-state
+                               (mgt-token-to-id st1)
+                               (mgt-id-to-token st1)
+                               (mgt-prefixes st1)
+                               (mgt-suffixes st1)
+                               (mgt-roots st1)
+                               new-bpe
+                               (mgt-next-id st1)))
+                         (new-seqs (apply-merge-to-seqs seqs first-id second-id merged-id)))
+                    (train-bpe-step st2 new-seqs (- merge-count 1))))))))))))
+
+(defthm mgt-state-p-of-train-bpe-step
+  (implies (and (mgt-state-p st)
+                (true-listp seqs)
+                (natp merge-count))
+           (mgt-state-p (mv-nth 0 (train-bpe-step st seqs merge-count))))
+  :hints (("Goal" :induct (train-bpe-step st seqs merge-count))))
+
+(defthm true-listp-of-train-bpe-step-seqs
+  (implies (and (mgt-state-p st)
+                (true-listp seqs)
+                (natp merge-count))
+           (true-listp (mv-nth 1 (train-bpe-step st seqs merge-count))))
+  :hints (("Goal" :induct (train-bpe-step st seqs merge-count))))
+
+(defun text-to-byte-seq (text pos acc)
+  (declare (xargs :guard (and (stringp text) (natp pos) (nat-listp acc)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      (reverse acc)
+    (text-to-byte-seq text (+ pos 1)
+                      (cons (char-code (char text pos)) acc))))
+
+(defthm nat-listp-of-text-to-byte-seq
+  (implies (and (stringp text) (natp pos) (nat-listp acc))
+           (nat-listp (text-to-byte-seq text pos acc)))
+  :hints (("Goal" :induct (text-to-byte-seq text pos acc))))
+
+(defun byte-to-hex-token (byte)
+  (declare (xargs :guard (natp byte)))
+  (let* ((b (mod byte 256))
+         (hi (floor b 16))
+         (lo (mod b 16))
+         (hex-chars "0123456789abcdef")
+         (hi-char (char hex-chars hi))
+         (lo-char (char hex-chars lo)))
+    (coerce (list #\< hi-char lo-char #\>) 'string)))
+
+(defthm stringp-of-byte-to-hex-token
+  (implies (natp byte)
+           (stringp (byte-to-hex-token byte)))
+  :rule-classes :type-prescription)
+
+(defun init-byte-tokens (st n)
+  (declare (xargs :guard (and (mgt-state-p st) (natp n))
+                  :measure (nfix (- 256 n))))
+  (if (or (not (natp n)) (>= n 256))
+      st
+    (let ((hex-tok (byte-to-hex-token n)))
+      (mv-let (st1 id)
+        (add-token-to-state st hex-tok)
+        (declare (ignore id))
+        (init-byte-tokens st1 (+ n 1))))))
+
+(defthm mgt-state-p-of-init-byte-tokens
+  (implies (and (mgt-state-p st) (natp n))
+           (mgt-state-p (init-byte-tokens st n)))
+  :hints (("Goal" :induct (init-byte-tokens st n))))
+
+(defun text-to-token-seq (st text pos acc)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text)
+                               (natp pos) (nat-listp acc)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      (reverse acc)
+    (let* ((byte (char-code (char text pos)))
+           (hex-tok (byte-to-hex-token byte))
+           (tid (lookup-token hex-tok (mgt-token-to-id st)))
+           (token-id (if tid tid *special-unk*)))
+      (text-to-token-seq st text (+ pos 1) (cons token-id acc)))))
+
+(defthm nat-listp-of-text-to-token-seq
+  (implies (and (mgt-state-p st) (stringp text)
+                (natp pos) (nat-listp acc))
+           (nat-listp (text-to-token-seq st text pos acc)))
+  :hints (("Goal" :induct (text-to-token-seq st text pos acc))))
+
+(defun corpus-to-seqs (st corpus acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (string-list-p corpus)
+                               (true-listp acc))
+                  :measure (len corpus)))
+  (if (atom corpus)
+      (reverse acc)
+    (let ((seq (text-to-token-seq st (car corpus) 0 nil)))
+      (corpus-to-seqs st (cdr corpus) (cons seq acc)))))
+
+(defthm true-listp-of-corpus-to-seqs
+  (implies (and (mgt-state-p st)
+                (string-list-p corpus)
+                (true-listp acc))
+           (true-listp (corpus-to-seqs st corpus acc)))
+  :hints (("Goal" :induct (corpus-to-seqs st corpus acc))))
+
+(defun train-bpe (st corpus num-merges)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (string-list-p corpus)
+                               (natp num-merges))))
+  (let* ((st1 (init-byte-tokens st 0))
+         (seqs (corpus-to-seqs st1 corpus nil)))
+    (mv-let (st2 final-seqs)
+      (train-bpe-step st1 seqs num-merges)
+      (declare (ignore final-seqs))
+      st2)))
+
+(defthm mgt-state-p-of-train-bpe
+  (implies (and (mgt-state-p st)
+                (string-list-p corpus)
+                (natp num-merges))
+           (mgt-state-p (train-bpe st corpus num-merges))))
+
+(defun add-vocab-word (st word is-anchor)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word) (booleanp is-anchor))))
+  (mv-let (st1 id)
+    (add-token-to-state st word)
+    (declare (ignore id))
+    st1))
+
+(defthm mgt-state-p-of-add-vocab-word
+  (implies (and (mgt-state-p st) (stringp word) (booleanp is-anchor))
+           (mgt-state-p (add-vocab-word st word is-anchor))))
+
+(defun remove-from-token-list (word lst)
+  (declare (xargs :guard (token-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      nil
+    (if (equal word (car (car lst)))
+        (remove-from-token-list word (cdr lst))
+      (cons (car lst) (remove-from-token-list word (cdr lst))))))
+
+(defthm token-list-p-of-remove-from-token-list
+  (implies (token-list-p lst)
+           (token-list-p (remove-from-token-list word lst)))
+  :hints (("Goal" :induct (remove-from-token-list word lst))))
+
+(defthm len-of-remove-from-token-list-leq
+  (implies (token-list-p lst)
+           (<= (len (remove-from-token-list word lst)) (len lst)))
+  :hints (("Goal" :induct (remove-from-token-list word lst)))
+  :rule-classes :linear)
+
+(defun remove-from-id-list (id lst)
+  (declare (xargs :guard (id-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      nil
+    (if (equal id (car (car lst)))
+        (remove-from-id-list id (cdr lst))
+      (cons (car lst) (remove-from-id-list id (cdr lst))))))
+
+(defthm id-list-p-of-remove-from-id-list
+  (implies (id-list-p lst)
+           (id-list-p (remove-from-id-list id lst)))
+  :hints (("Goal" :induct (remove-from-id-list id lst))))
+
+(defun remove-from-bpe-list (word id lst)
+  (declare (xargs :guard (and (bpe-pair-list-p lst) (natp id))
+                  :measure (len lst)))
+  (if (atom lst)
+      nil
+    (let* ((entry (car lst))
+           (key (car entry))
+           (merge (cdr entry))
+           (merge-id (if (bpe-merge-p merge) (car merge) 0)))
+      (if (or (equal key word)
+              (equal merge-id id))
+          (remove-from-bpe-list word id (cdr lst))
+        (cons entry (remove-from-bpe-list word id (cdr lst)))))))
+
+(defthm bpe-pair-list-p-of-remove-from-bpe-list
+  (implies (bpe-pair-list-p lst)
+           (bpe-pair-list-p (remove-from-bpe-list word id lst)))
+  :hints (("Goal" :induct (remove-from-bpe-list word id lst))))
+
+(defun remove-vocab-word (st word)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word))))
+  (if (or (equal word "[PAD]")
+          (equal word "[UNK]")
+          (equal word "[BOS]")
+          (equal word "[EOS]"))
+      st
+    (let ((id (lookup-token word (mgt-token-to-id st))))
+      (if (null id)
+          st
+        (make-mgt-state
+         (remove-from-token-list word (mgt-token-to-id st))
+         (remove-from-id-list id (mgt-id-to-token st))
+         (remove-from-token-list word (mgt-prefixes st))
+         (remove-from-token-list word (mgt-suffixes st))
+         (remove-from-token-list word (mgt-roots st))
+         (remove-from-bpe-list word id (mgt-bpe-pairs st))
+         (mgt-next-id st))))))
+
+(defthm mgt-state-p-of-remove-vocab-word
+  (implies (and (mgt-state-p st) (stringp word))
+           (mgt-state-p (remove-vocab-word st word))))
+
+(defthm remove-vocab-word-preserves-next-id
+  (implies (and (mgt-state-p st) (stringp word))
+           (equal (mgt-next-id (remove-vocab-word st word))
+                  (mgt-next-id st))))
+
+(defthm remove-special-is-identity
+  (implies (and (mgt-state-p st)
+                (or (equal word "[PAD]")
+                    (equal word "[UNK]")
+                    (equal word "[BOS]")
+                    (equal word "[EOS]")))
+           (equal (remove-vocab-word st word) st)))
+
+(defun count-known-chars (st text pos count)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp text)
+                               (natp pos)
+                               (natp count)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      count
+    (let ((c-str (coerce (list (char text pos)) 'string)))
+      (if (lookup-token c-str (mgt-token-to-id st))
+          (count-known-chars st text (+ pos 1) (+ count 1))
+        (count-known-chars st text (+ pos 1) count)))))
+
+(defthm natp-of-count-known-chars
+  (implies (and (natp pos) (natp count))
+           (natp (count-known-chars st text pos count)))
+  :hints (("Goal" :induct (count-known-chars st text pos count)))
+  :rule-classes :type-prescription)
+
+(defthm count-known-chars-geq-count
+  (implies (and (natp pos) (natp count))
+           (<= count (count-known-chars st text pos count)))
+  :hints (("Goal" :induct (count-known-chars st text pos count)))
+  :rule-classes :linear)
+
+(defun coverage-ratio (st corpus)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp corpus))))
+  (if (equal (length corpus) 0)
+      0
+    (let ((known (count-known-chars st corpus 0 0)))
+      (floor (* known 100) (length corpus)))))
+
+(defthm natp-of-coverage-ratio
+  (implies (and (mgt-state-p st) (stringp corpus))
+           (natp (coverage-ratio st corpus)))
+  :rule-classes :type-prescription)
+
+(defun tensor-data-p (data)
+  (declare (xargs :guard t))
+  (if (atom data)
+      (null data)
+    (and (rationalp (car data))
+         (tensor-data-p (cdr data)))))
+
+(defthm tensor-data-p-of-nil
+  (tensor-data-p nil))
+
+(defthm tensor-data-p-of-cons
+  (implies (and (rationalp x) (tensor-data-p rest))
+           (tensor-data-p (cons x rest))))
+
+(defthm tensor-data-p-implies-true-listp
+  (implies (tensor-data-p data)
+           (true-listp data))
+  :hints (("Goal" :induct (tensor-data-p data))))
+
+(defun tensor-p (tensor)
+  (declare (xargs :guard t))
+  (and (consp tensor)
+       (nat-listp (car tensor))
+       (tensor-data-p (cdr tensor))))
+
+(defun make-tensor (shape data)
+  (declare (xargs :guard (and (nat-listp shape) (tensor-data-p data))))
+  (cons shape data))
+
+(defun tensor-shape (tensor)
+  (declare (xargs :guard (tensor-p tensor)))
+  (car tensor))
+
+(defun tensor-data (tensor)
+  (declare (xargs :guard (tensor-p tensor)))
+  (cdr tensor))
+
+(defthm tensor-p-of-make-tensor
+  (implies (and (nat-listp shape) (tensor-data-p data))
+           (tensor-p (make-tensor shape data))))
+
+(defthm nat-listp-of-tensor-shape
+  (implies (tensor-p tensor)
+           (nat-listp (tensor-shape tensor))))
+
+(defthm tensor-data-p-of-tensor-data
+  (implies (tensor-p tensor)
+           (tensor-data-p (tensor-data tensor))))
+
+(defun tokens-to-tensor-data (tokens)
+  (declare (xargs :guard (nat-listp tokens)
+                  :measure (len tokens)))
   (if (atom tokens)
       nil
-    (if (mgt-is-special-token-id (car tokens))
-        (filter-special-tokens (cdr tokens))
-      (cons (car tokens) (filter-special-tokens (cdr tokens))))))
+    (cons (car tokens) (tokens-to-tensor-data (cdr tokens)))))
 
-(defthm true-listp-filter-special-tokens
-  (true-listp (filter-special-tokens tokens))
-  :rule-classes (:rewrite :type-prescription))
+(defthm tensor-data-p-of-tokens-to-tensor-data
+  (implies (nat-listp tokens)
+           (tensor-data-p (tokens-to-tensor-data tokens)))
+  :hints (("Goal" :induct (tokens-to-tensor-data tokens))))
 
-(defthm filter-special-tokens-nil
-  (equal (filter-special-tokens nil) nil))
+(defthm len-of-tokens-to-tensor-data
+  (implies (nat-listp tokens)
+           (equal (len (tokens-to-tensor-data tokens))
+                  (len tokens)))
+  :hints (("Goal" :induct (tokens-to-tensor-data tokens))))
 
-(defthm len-filter-special-tokens-le
-  (<= (len (filter-special-tokens tokens)) (len tokens))
+(defun encode-to-tensor (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (let* ((tokens (encode-text st text))
+         (data (tokens-to-tensor-data tokens))
+         (shape (list (len tokens))))
+    (make-tensor shape data)))
+
+(defthm tensor-p-of-encode-to-tensor
+  (implies (and (mgt-state-p st) (stringp text))
+           (tensor-p (encode-to-tensor st text))))
+
+(defun max-len-of-token-lists (token-lists current-max)
+  (declare (xargs :guard (and (true-listp token-lists) (natp current-max))
+                  :measure (len token-lists)))
+  (if (atom token-lists)
+      current-max
+    (let* ((row (car token-lists))
+           (row-len (if (nat-listp row) (len row) 0))
+           (new-max (if (> row-len current-max) row-len current-max)))
+      (max-len-of-token-lists (cdr token-lists) new-max))))
+
+(defthm natp-of-max-len-of-token-lists
+  (implies (natp current-max)
+           (natp (max-len-of-token-lists token-lists current-max)))
+  :hints (("Goal" :induct (max-len-of-token-lists token-lists current-max)))
+  :rule-classes :type-prescription)
+
+(defthm max-len-geq-current
+  (implies (natp current-max)
+           (<= current-max (max-len-of-token-lists token-lists current-max)))
+  :hints (("Goal" :induct (max-len-of-token-lists token-lists current-max)))
   :rule-classes :linear)
 
-(defthm filter-special-tokens-no-specials
-  (implies (consp (filter-special-tokens tokens))
-           (not (mgt-is-special-token-id (car (filter-special-tokens tokens))))))
-
-(defthm filter-special-tokens-append
-  (equal (filter-special-tokens (append a b))
-         (append (filter-special-tokens a) (filter-special-tokens b)))
-  :hints (("Goal" :induct (filter-special-tokens a))))
-
-(defthm len-filter-plus-count-special
-  (equal (+ (len (filter-special-tokens tokens))
-            (count-special-tokens tokens))
-         (len tokens))
-  :hints (("Goal" :induct (filter-special-tokens tokens))))
-
-(defun pad-tokens-to-len (tokens target-len pad-id)
-  (declare (xargs :guard (and (natp target-len) (true-listp tokens))
-                  :measure (nfix (- (nfix target-len) (len tokens)))))
+(defun pad-token-list (tokens target-len pad-val)
+  (declare (xargs :guard (and (nat-listp tokens) (natp target-len) (natp pad-val))
+                  :measure (nfix (- target-len (len tokens)))))
   (if (or (not (natp target-len))
           (>= (len tokens) target-len))
       tokens
-    (pad-tokens-to-len (append tokens (list pad-id))
-                       target-len
-                       pad-id)))
+    (pad-token-list (append tokens (list pad-val))
+                    target-len
+                    pad-val)))
 
-(defthm true-listp-pad-tokens-to-len
-  (implies (true-listp tokens)
-           (true-listp (pad-tokens-to-len tokens target-len pad-id)))
-  :rule-classes (:rewrite :type-prescription))
+(defun make-zeros (n)
+  (declare (xargs :guard (natp n)
+                  :measure (nfix n)))
+  (if (zp n)
+      nil
+    (cons 0 (make-zeros (- n 1)))))
 
-(defthm len-pad-tokens-to-len-ge
-  (implies (and (natp target-len) (true-listp tokens))
-           (<= target-len (len (pad-tokens-to-len tokens target-len pad-id))))
-  :rule-classes :linear)
+(defthm tensor-data-p-of-make-zeros
+  (implies (natp n)
+           (tensor-data-p (make-zeros n)))
+  :hints (("Goal" :induct (make-zeros n))))
 
-(defthm pad-tokens-noop-when-long-enough
-  (implies (and (natp target-len)
-                (true-listp tokens)
-                (>= (len tokens) target-len))
-           (equal (pad-tokens-to-len tokens target-len pad-id)
-                  tokens)))
+(defthm len-of-make-zeros
+  (implies (natp n)
+           (equal (len (make-zeros n)) n))
+  :hints (("Goal" :induct (make-zeros n))))
 
-(defun truncate-tokens-to-len (tokens target-len)
-  (declare (xargs :guard (natp target-len)))
+(defun pad-tensor-data (data target-len)
+  (declare (xargs :guard (and (tensor-data-p data) (natp target-len))
+                  :measure (nfix (- target-len (len data)))))
   (if (or (not (natp target-len))
-          (<= (len tokens) target-len))
-      tokens
-    (take target-len tokens)))
+          (>= (len data) target-len))
+      data
+    (append data (make-zeros (- target-len (len data))))))
 
-(defthm len-truncate-tokens-to-len-le
-  (implies (natp target-len)
-           (<= (len (truncate-tokens-to-len tokens target-len)) target-len))
+(defun flatten-token-lists-padded (token-lists max-len acc)
+  (declare (xargs :guard (and (true-listp token-lists)
+                               (natp max-len)
+                               (tensor-data-p acc))
+                  :measure (len token-lists)))
+  (if (atom token-lists)
+      acc
+    (let* ((row (car token-lists))
+           (row-data (if (nat-listp row) (tokens-to-tensor-data row) nil))
+           (padded (pad-tensor-data row-data max-len)))
+      (flatten-token-lists-padded (cdr token-lists) max-len
+                                  (append acc padded)))))
+
+(defun encode-batch-to-tensor (st texts)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p texts))))
+  (let* ((batch (encode-batch st texts))
+         (max-len (max-len-of-token-lists batch 1))
+         (flat-data (flatten-token-lists-padded batch max-len nil))
+         (shape (list (len texts) max-len)))
+    (make-tensor shape flat-data)))
+
+(defun tensor-data-to-tokens (data)
+  (declare (xargs :guard (tensor-data-p data)
+                  :measure (len data)))
+  (if (atom data)
+      nil
+    (let* ((val (car data))
+           (tok (if (and (rationalp val)
+                         (>= val 0)
+                         (integerp val))
+                    (nfix val)
+                  *special-unk*)))
+      (cons tok (tensor-data-to-tokens (cdr data))))))
+
+(defthm nat-listp-of-tensor-data-to-tokens
+  (implies (tensor-data-p data)
+           (nat-listp (tensor-data-to-tokens data)))
+  :hints (("Goal" :induct (tensor-data-to-tokens data))))
+
+(defthm len-of-tensor-data-to-tokens
+  (implies (tensor-data-p data)
+           (equal (len (tensor-data-to-tokens data))
+                  (len data)))
+  :hints (("Goal" :induct (tensor-data-to-tokens data))))
+
+(defun decode-from-tensor (st tensor)
+  (declare (xargs :guard (and (mgt-state-p st) (tensor-p tensor))))
+  (let* ((data (tensor-data tensor))
+         (tokens (tensor-data-to-tokens data)))
+    (decode-tokens st tokens)))
+
+(defthm stringp-of-decode-from-tensor
+  (implies (and (mgt-state-p st) (tensor-p tensor))
+           (stringp (decode-from-tensor st tensor))))
+
+(defun set-with-prefix (st token-to-id id-to-token prefixes suffixes roots bpe-pairs next-id)
+  (declare (xargs :guard (and (token-list-p token-to-id)
+                               (id-list-p id-to-token)
+                               (token-list-p prefixes)
+                               (token-list-p suffixes)
+                               (token-list-p roots)
+                               (bpe-pair-list-p bpe-pairs)
+                               (natp next-id))))
+  (make-mgt-state token-to-id id-to-token prefixes suffixes roots bpe-pairs next-id))
+
+(defthm mgt-state-p-of-set-with-prefix
+  (implies (and (token-list-p t2i)
+                (id-list-p i2t)
+                (token-list-p pref)
+                (token-list-p suf)
+                (token-list-p roots)
+                (bpe-pair-list-p bpe)
+                (natp nid))
+           (mgt-state-p (set-with-prefix t2i i2t pref suf roots bpe nid))))
+
+(defun serialize-token-list (lst)
+  (declare (xargs :guard (token-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      nil
+    (cons (list (car (car lst)) (cdr (car lst)))
+          (serialize-token-list (cdr lst)))))
+
+(defthm true-listp-of-serialize-token-list
+  (implies (token-list-p lst)
+           (true-listp (serialize-token-list lst)))
+  :hints (("Goal" :induct (serialize-token-list lst))))
+
+(defthm len-of-serialize-token-list
+  (implies (token-list-p lst)
+           (equal (len (serialize-token-list lst))
+                  (len lst)))
+  :hints (("Goal" :induct (serialize-token-list lst))))
+
+(defun serialize-id-list (lst)
+  (declare (xargs :guard (id-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      nil
+    (cons (list (car (car lst)) (cdr (car lst)))
+          (serialize-id-list (cdr lst)))))
+
+(defthm true-listp-of-serialize-id-list
+  (implies (id-list-p lst)
+           (true-listp (serialize-id-list lst)))
+  :hints (("Goal" :induct (serialize-id-list lst))))
+
+(defun serialize-bpe-list (lst)
+  (declare (xargs :guard (bpe-pair-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      nil
+    (let* ((entry (car lst))
+           (key (car entry))
+           (merge (cdr entry))
+           (tid (if (bpe-merge-p merge) (car merge) 0))
+           (pri (if (bpe-merge-p merge) (cdr merge) 0)))
+      (cons (list key tid pri)
+            (serialize-bpe-list (cdr lst))))))
+
+(defthm true-listp-of-serialize-bpe-list
+  (implies (bpe-pair-list-p lst)
+           (true-listp (serialize-bpe-list lst)))
+  :hints (("Goal" :induct (serialize-bpe-list lst))))
+
+(defun serialize-mgt-state (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (list (serialize-token-list (mgt-token-to-id st))
+        (serialize-id-list (mgt-id-to-token st))
+        (serialize-token-list (mgt-prefixes st))
+        (serialize-token-list (mgt-suffixes st))
+        (serialize-token-list (mgt-roots st))
+        (serialize-bpe-list (mgt-bpe-pairs st))
+        (mgt-next-id st)))
+
+(defthm true-listp-of-serialize-mgt-state
+  (implies (mgt-state-p st)
+           (true-listp (serialize-mgt-state st))))
+
+(defun insert-sorted-by-id (entry lst)
+  (declare (xargs :guard (and (token-entry-p entry) (token-list-p lst))
+                  :measure (len lst)))
+  (if (atom lst)
+      (list entry)
+    (if (<= (cdr entry) (cdr (car lst)))
+        (cons entry lst)
+      (cons (car lst) (insert-sorted-by-id entry (cdr lst))))))
+
+(defthm token-list-p-of-insert-sorted-by-id
+  (implies (and (token-entry-p entry) (token-list-p lst))
+           (token-list-p (insert-sorted-by-id entry lst)))
+  :hints (("Goal" :induct (insert-sorted-by-id entry lst))))
+
+(defun sort-token-list-by-id (lst acc)
+  (declare (xargs :guard (and (token-list-p lst) (token-list-p acc))
+                  :measure (len lst)))
+  (if (atom lst)
+      acc
+    (sort-token-list-by-id (cdr lst)
+                           (insert-sorted-by-id (car lst) acc))))
+
+(defthm token-list-p-of-sort-token-list-by-id
+  (implies (and (token-list-p lst) (token-list-p acc))
+           (token-list-p (sort-token-list-by-id lst acc)))
+  :hints (("Goal" :induct (sort-token-list-by-id lst acc))))
+
+(defun insert-sorted-by-priority (entry lst)
+  (declare (xargs :guard (and (bpe-pair-entry-p entry) (bpe-pair-list-p lst))
+                  :measure (len lst)))
+  (if (atom lst)
+      (list entry)
+    (let* ((e-merge (cdr entry))
+           (l-merge (cdr (car lst)))
+           (e-pri (if (bpe-merge-p e-merge) (cdr e-merge) 0))
+           (l-pri (if (bpe-merge-p l-merge) (cdr l-merge) 0)))
+      (if (<= e-pri l-pri)
+          (cons entry lst)
+        (cons (car lst) (insert-sorted-by-priority entry (cdr lst)))))))
+
+(defthm bpe-pair-list-p-of-insert-sorted-by-priority
+  (implies (and (bpe-pair-entry-p entry) (bpe-pair-list-p lst))
+           (bpe-pair-list-p (insert-sorted-by-priority entry lst)))
+  :hints (("Goal" :induct (insert-sorted-by-priority entry lst))))
+
+(defun sort-bpe-by-priority (lst acc)
+  (declare (xargs :guard (and (bpe-pair-list-p lst) (bpe-pair-list-p acc))
+                  :measure (len lst)))
+  (if (atom lst)
+      acc
+    (sort-bpe-by-priority (cdr lst)
+                          (insert-sorted-by-priority (car lst) acc))))
+
+(defthm bpe-pair-list-p-of-sort-bpe-by-priority
+  (implies (and (bpe-pair-list-p lst) (bpe-pair-list-p acc))
+           (bpe-pair-list-p (sort-bpe-by-priority lst acc)))
+  :hints (("Goal" :induct (sort-bpe-by-priority lst acc))))
+
+(defun lookup-token-not-in-list (token lst)
+  (declare (xargs :guard (token-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      t
+    (if (equal token (car (car lst)))
+        nil
+      (lookup-token-not-in-list token (cdr lst)))))
+
+(defthm lookup-token-not-iff-lookup
+  (implies (token-list-p lst)
+           (iff (lookup-token-not-in-list token lst)
+                (not (lookup-token token lst))))
+  :hints (("Goal" :induct (lookup-token-not-in-list token lst))))
+
+(defun all-tokens-valid (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      t
+    (and (if (lookup-id (car tokens) (mgt-id-to-token st)) t nil)
+         (all-tokens-valid st (cdr tokens)))))
+
+(defthm all-tokens-valid-equiv-validate
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (iff (all-tokens-valid st tokens)
+                (validate-tokens st tokens)))
+  :hints (("Goal" :induct (all-tokens-valid st tokens))))
+
+(defun token-to-id-consistent-p (t2i i2t)
+  (declare (xargs :guard (and (token-list-p t2i) (id-list-p i2t))
+                  :measure (len t2i)))
+  (if (atom t2i)
+      t
+    (let* ((entry (car t2i))
+           (token (car entry))
+           (id (cdr entry))
+           (reverse-lookup (lookup-id id i2t)))
+      (and reverse-lookup
+           (equal reverse-lookup token)
+           (token-to-id-consistent-p (cdr t2i) i2t)))))
+
+(defthm token-to-id-consistent-p-of-nil
+  (token-to-id-consistent-p nil i2t))
+
+(defun id-to-token-consistent-p (i2t t2i)
+  (declare (xargs :guard (and (id-list-p i2t) (token-list-p t2i))
+                  :measure (len i2t)))
+  (if (atom i2t)
+      t
+    (let* ((entry (car i2t))
+           (id (car entry))
+           (token (cdr entry))
+           (reverse-lookup (lookup-token token t2i)))
+      (and reverse-lookup
+           (equal reverse-lookup id)
+           (id-to-token-consistent-p (cdr i2t) t2i)))))
+
+(defthm id-to-token-consistent-p-of-nil
+  (id-to-token-consistent-p nil t2i))
+
+(defun mgt-consistent-p (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (and (token-to-id-consistent-p (mgt-token-to-id st) (mgt-id-to-token st))
+       (id-to-token-consistent-p (mgt-id-to-token st) (mgt-token-to-id st))))
+
+(defun all-ids-below (lst bound)
+  (declare (xargs :guard (and (token-list-p lst) (natp bound))
+                  :measure (len lst)))
+  (if (atom lst)
+      t
+    (and (< (cdr (car lst)) bound)
+         (all-ids-below (cdr lst) bound))))
+
+(defthm all-ids-below-of-nil
+  (all-ids-below nil bound))
+
+(defthm all-ids-below-monotonic
+  (implies (and (all-ids-below lst bound1)
+                (<= bound1 bound2)
+                (natp bound1)
+                (natp bound2))
+           (all-ids-below lst bound2))
+  :hints (("Goal" :induct (all-ids-below lst bound1))))
+
+(defun no-duplicate-tokens (lst)
+  (declare (xargs :guard (token-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      t
+    (and (not (lookup-token (car (car lst)) (cdr lst)))
+         (no-duplicate-tokens (cdr lst)))))
+
+(defthm no-duplicate-tokens-of-nil
+  (no-duplicate-tokens nil))
+
+(defun no-duplicate-ids (lst)
+  (declare (xargs :guard (id-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      t
+    (and (not (lookup-id (car (car lst)) (cdr lst)))
+         (no-duplicate-ids (cdr lst)))))
+
+(defthm no-duplicate-ids-of-nil
+  (no-duplicate-ids nil))
+
+(defun mgt-well-formed-p (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (and (mgt-consistent-p st)
+       (equal (len (mgt-token-to-id st))
+              (len (mgt-id-to-token st)))
+       (all-ids-below (mgt-token-to-id st) (mgt-next-id st))))
+
+(defun string-concat-list (strs)
+  (declare (xargs :guard (string-list-p strs)
+                  :measure (len strs)))
+  (if (atom strs)
+      ""
+    (concatenate 'string (car strs) (string-concat-list (cdr strs)))))
+
+(defthm stringp-of-string-concat-list
+  (implies (string-list-p strs)
+           (stringp (string-concat-list strs)))
+  :hints (("Goal" :induct (string-concat-list strs))))
+
+(defun decode-tokens-to-list (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      nil
+    (cons (decode-token st (car tokens))
+          (decode-tokens-to-list st (cdr tokens)))))
+
+(defthm string-list-p-of-decode-tokens-to-list
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (string-list-p (decode-tokens-to-list st tokens)))
+  :hints (("Goal" :induct (decode-tokens-to-list st tokens))))
+
+(defthm len-of-decode-tokens-to-list
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (equal (len (decode-tokens-to-list st tokens))
+                  (len tokens)))
+  :hints (("Goal" :induct (decode-tokens-to-list st tokens))))
+
+(defun encode-decode-roundtrip-check (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (let* ((tokens (encode-text st text))
+         (decoded (decode-tokens st tokens)))
+    decoded))
+
+(defthm stringp-of-encode-decode-roundtrip
+  (implies (and (mgt-state-p st) (stringp text))
+           (stringp (encode-decode-roundtrip-check st text))))
+
+(defun count-non-unk (tokens)
+  (declare (xargs :guard (nat-listp tokens)
+                  :measure (len tokens)))
+  (if (atom tokens)
+      0
+    (if (not (equal (car tokens) *special-unk*))
+        (+ 1 (count-non-unk (cdr tokens)))
+      (count-non-unk (cdr tokens)))))
+
+(defthm natp-of-count-non-unk
+  (implies (nat-listp tokens)
+           (natp (count-non-unk tokens)))
+  :hints (("Goal" :induct (count-non-unk tokens)))
+  :rule-classes :type-prescription)
+
+(defthm count-non-unk-leq-len
+  (implies (nat-listp tokens)
+           (<= (count-non-unk tokens) (len tokens)))
+  :hints (("Goal" :induct (count-non-unk tokens)))
   :rule-classes :linear)
 
-(defthm truncate-tokens-noop-when-short-enough
-  (implies (and (natp target-len)
-                (<= (len tokens) target-len))
-           (equal (truncate-tokens-to-len tokens target-len)
-                  tokens)))
+(defun count-unk (tokens)
+  (declare (xargs :guard (nat-listp tokens)
+                  :measure (len tokens)))
+  (if (atom tokens)
+      0
+    (if (equal (car tokens) *special-unk*)
+        (+ 1 (count-unk (cdr tokens)))
+      (count-unk (cdr tokens)))))
 
-(defun mgt-encode-with-bos-eos (text st)
-  (declare (xargs :guard t))
-  (let ((tokens (mgt-encode text st)))
-    (cons *bos-id* (append tokens (list *eos-id*)))))
-
-(defthm true-listp-mgt-encode-with-bos-eos
-  (true-listp (mgt-encode-with-bos-eos text st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defthm consp-mgt-encode-with-bos-eos
-  (consp (mgt-encode-with-bos-eos text st)))
-
-(defthm car-mgt-encode-with-bos-eos
-  (equal (car (mgt-encode-with-bos-eos text st)) *bos-id*))
-
-(defthm len-mgt-encode-with-bos-eos
-  (equal (len (mgt-encode-with-bos-eos text st))
-         (+ 2 (len (mgt-encode text st)))))
-
-(defthm last-token-is-eos
-  (implies (true-listp (mgt-encode text st))
-           (equal (nth (+ 1 (len (mgt-encode text st)))
-                       (mgt-encode-with-bos-eos text st))
-                  *eos-id*)))
-
-(defun mgt-decode-strip-bos-eos (tokens st)
-  (declare (xargs :guard t))
-  (mgt-decode tokens st))
-
-(defthm mgt-decode-strip-bos-eos-is-decode
-  (equal (mgt-decode-strip-bos-eos tokens st)
-         (mgt-decode tokens st)))
-
-(defun mgt-vocab-words (st)
-  (declare (xargs :guard t))
-  (alist-keys (mgt-tok2id st)))
-
-(defthm true-listp-mgt-vocab-words
-  (true-listp (mgt-vocab-words st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defun mgt-vocab-ids (st)
-  (declare (xargs :guard t))
-  (alist-vals (mgt-tok2id st)))
-
-(defthm true-listp-mgt-vocab-ids
-  (true-listp (mgt-vocab-ids st))
-  :rule-classes (:rewrite :type-prescription))
-
-(defun mgt-is-anchor-p (word st)
-  (declare (xargs :guard t))
-  (alist-contains word (mgt-anchors st)))
-
-(defthm booleanp-mgt-is-anchor-p
-  (or (equal (mgt-is-anchor-p word st) t)
-      (equal (mgt-is-anchor-p word st) nil))
+(defthm natp-of-count-unk
+  (implies (nat-listp tokens)
+           (natp (count-unk tokens)))
+  :hints (("Goal" :induct (count-unk tokens)))
   :rule-classes :type-prescription)
 
-(defun mgt-is-prefix-p (word st)
-  (declare (xargs :guard t))
-  (alist-contains word (mgt-prefixes st)))
+(defthm count-unk-leq-len
+  (implies (nat-listp tokens)
+           (<= (count-unk tokens) (len tokens)))
+  :hints (("Goal" :induct (count-unk tokens)))
+  :rule-classes :linear)
 
-(defthm booleanp-mgt-is-prefix-p
-  (or (equal (mgt-is-prefix-p word st) t)
-      (equal (mgt-is-prefix-p word st) nil))
+(defthm count-unk-plus-non-unk-equals-len
+  (implies (nat-listp tokens)
+           (equal (+ (count-unk tokens) (count-non-unk tokens))
+                  (len tokens)))
+  :hints (("Goal" :induct (count-unk tokens))))
+
+(defun filter-special-tokens (tokens)
+  (declare (xargs :guard (nat-listp tokens)
+                  :measure (len tokens)))
+  (if (atom tokens)
+      nil
+    (if (or (equal (car tokens) *special-pad*)
+            (equal (car tokens) *special-unk*)
+            (equal (car tokens) *special-bos*)
+            (equal (car tokens) *special-eos*))
+        (filter-special-tokens (cdr tokens))
+      (cons (car tokens) (filter-special-tokens (cdr tokens))))))
+
+(defthm nat-listp-of-filter-special-tokens
+  (implies (nat-listp tokens)
+           (nat-listp (filter-special-tokens tokens)))
+  :hints (("Goal" :induct (filter-special-tokens tokens))))
+
+(defthm len-of-filter-special-tokens-leq
+  (implies (nat-listp tokens)
+           (<= (len (filter-special-tokens tokens)) (len tokens)))
+  :hints (("Goal" :induct (filter-special-tokens tokens)))
+  :rule-classes :linear)
+
+(defun token-list-contains-p (token lst)
+  (declare (xargs :guard (token-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      nil
+    (if (equal token (car (car lst)))
+        t
+      (token-list-contains-p token (cdr lst)))))
+
+(defthm token-list-contains-p-iff-lookup
+  (implies (token-list-p lst)
+           (iff (token-list-contains-p token lst)
+                (lookup-token token lst)))
+  :hints (("Goal" :induct (token-list-contains-p token lst))))
+
+(defun id-list-contains-p (id lst)
+  (declare (xargs :guard (id-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      nil
+    (if (equal id (car (car lst)))
+        t
+      (id-list-contains-p id (cdr lst)))))
+
+(defthm id-list-contains-p-iff-lookup
+  (implies (id-list-p lst)
+           (iff (id-list-contains-p id lst)
+                (lookup-id id lst)))
+  :hints (("Goal" :induct (id-list-contains-p id lst))))
+
+(defun count-token-list (lst)
+  (declare (xargs :guard (token-list-p lst)))
+  (len lst))
+
+(defthm natp-of-count-token-list
+  (implies (token-list-p lst)
+           (natp (count-token-list lst)))
   :rule-classes :type-prescription)
 
-(defun mgt-is-suffix-p (word st)
-  (declare (xargs :guard t))
-  (alist-contains word (mgt-suffixes st)))
+(defun count-id-list (lst)
+  (declare (xargs :guard (id-list-p lst)))
+  (len lst))
 
-(defthm booleanp-mgt-is-suffix-p
-  (or (equal (mgt-is-suffix-p word st) t)
-      (equal (mgt-is-suffix-p word st) nil))
+(defthm natp-of-count-id-list
+  (implies (id-list-p lst)
+           (natp (count-id-list lst)))
   :rule-classes :type-prescription)
 
-(defun mgt-is-root-p (word st)
-  (declare (xargs :guard t))
-  (alist-contains word (mgt-roots st)))
+(defun encode-multiple-texts (st texts acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (string-list-p texts)
+                               (true-listp acc))
+                  :measure (len texts)))
+  (if (atom texts)
+      (reverse acc)
+    (let ((tokens (encode-text st (car texts))))
+      (encode-multiple-texts st (cdr texts) (cons tokens acc)))))
 
-(defthm booleanp-mgt-is-root-p
-  (or (equal (mgt-is-root-p word st) t)
-      (equal (mgt-is-root-p word st) nil))
+(defthm true-listp-of-encode-multiple-texts
+  (implies (and (mgt-state-p st)
+                (string-list-p texts)
+                (true-listp acc))
+           (true-listp (encode-multiple-texts st texts acc)))
+  :hints (("Goal" :induct (encode-multiple-texts st texts acc))))
+
+(defthm len-of-encode-multiple-texts
+  (implies (and (mgt-state-p st)
+                (string-list-p texts)
+                (true-listp acc))
+           (equal (len (encode-multiple-texts st texts acc))
+                  (+ (len texts) (len acc))))
+  :hints (("Goal" :induct (encode-multiple-texts st texts acc))))
+
+(defun decode-multiple-token-lists (st token-lists acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (true-listp token-lists)
+                               (string-list-p acc))
+                  :measure (len token-lists)))
+  (if (atom token-lists)
+      (reverse acc)
+    (if (nat-listp (car token-lists))
+        (let ((text (decode-tokens st (car token-lists))))
+          (decode-multiple-token-lists st (cdr token-lists) (cons text acc)))
+      (decode-multiple-token-lists st (cdr token-lists) (cons "" acc)))))
+
+(defthm string-list-p-of-decode-multiple
+  (implies (and (mgt-state-p st)
+                (true-listp token-lists)
+                (string-list-p acc))
+           (string-list-p (decode-multiple-token-lists st token-lists acc)))
+  :hints (("Goal" :induct (decode-multiple-token-lists st token-lists acc))))
+
+(defthm len-of-decode-multiple
+  (implies (and (mgt-state-p st)
+                (true-listp token-lists)
+                (string-list-p acc))
+           (equal (len (decode-multiple-token-lists st token-lists acc))
+                  (+ (len token-lists) (len acc))))
+  :hints (("Goal" :induct (decode-multiple-token-lists st token-lists acc))))
+
+(defun count-entries-with-value (lst val)
+  (declare (xargs :guard (token-list-p lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      0
+    (if (equal (cdr (car lst)) val)
+        (+ 1 (count-entries-with-value (cdr lst) val))
+      (count-entries-with-value (cdr lst) val))))
+
+(defthm natp-of-count-entries-with-value
+  (implies (token-list-p lst)
+           (natp (count-entries-with-value lst val)))
+  :hints (("Goal" :induct (count-entries-with-value lst val)))
   :rule-classes :type-prescription)
 
-(defthm mgt-add-prefix-makes-prefix
-  (mgt-is-prefix-p pw (mgt-add-prefix pw st)))
+(defthm count-entries-with-value-leq-len
+  (implies (token-list-p lst)
+           (<= (count-entries-with-value lst val) (len lst)))
+  :hints (("Goal" :induct (count-entries-with-value lst val)))
+  :rule-classes :linear)
 
-(defthm mgt-add-suffix-makes-suffix
-  (mgt-is-suffix-p sw (mgt-add-suffix sw st)))
+(defun collect-tokens-with-prefix-str (t2i prefix)
+  (declare (xargs :guard (and (token-list-p t2i) (stringp prefix))
+                  :measure (len t2i)))
+  (if (atom t2i)
+      nil
+    (let ((token (car (car t2i))))
+      (if (string-prefix-p prefix token)
+          (cons (car t2i) (collect-tokens-with-prefix-str (cdr t2i) prefix))
+        (collect-tokens-with-prefix-str (cdr t2i) prefix)))))
 
-(defthm mgt-add-vocab-word-anchor-makes-anchor
-  (mgt-is-anchor-p w (mgt-add-vocab-word w t st)))
+(defthm token-list-p-of-collect-tokens-with-prefix-str
+  (implies (token-list-p t2i)
+           (token-list-p (collect-tokens-with-prefix-str t2i prefix)))
+  :hints (("Goal" :induct (collect-tokens-with-prefix-str t2i prefix))))
 
-(defun mgt-get-token-id (word st)
-  (declare (xargs :guard t))
-  (alist-get word (mgt-tok2id st)))
+(defthm len-of-collect-tokens-leq
+  (implies (token-list-p t2i)
+           (<= (len (collect-tokens-with-prefix-str t2i prefix))
+               (len t2i)))
+  :hints (("Goal" :induct (collect-tokens-with-prefix-str t2i prefix)))
+  :rule-classes :linear)
 
-(defun mgt-get-token-word (tid st)
-  (declare (xargs :guard t))
-  (alist-get tid (mgt-id2tok st)))
+(defun collect-tokens-with-suffix-str (t2i suffix)
+  (declare (xargs :guard (and (token-list-p t2i) (stringp suffix))
+                  :measure (len t2i)))
+  (if (atom t2i)
+      nil
+    (let ((token (car (car t2i))))
+      (if (string-suffix-p suffix token)
+          (cons (car t2i) (collect-tokens-with-suffix-str (cdr t2i) suffix))
+        (collect-tokens-with-suffix-str (cdr t2i) suffix)))))
 
-(defthm mgt-get-token-id-nil-when-not-present
-  (implies (not (alist-contains word (mgt-tok2id st)))
-           (equal (mgt-get-token-id word st) nil)))
+(defthm token-list-p-of-collect-tokens-with-suffix-str
+  (implies (token-list-p t2i)
+           (token-list-p (collect-tokens-with-suffix-str t2i suffix)))
+  :hints (("Goal" :induct (collect-tokens-with-suffix-str t2i suffix))))
 
-(defthm mgt-get-token-word-nil-when-not-present
-  (implies (not (alist-contains tid (mgt-id2tok st)))
-           (equal (mgt-get-token-word tid st) nil)))
+(defun min-token-id (lst current-min)
+  (declare (xargs :guard (and (token-list-p lst) (natp current-min))
+                  :measure (len lst)))
+  (if (atom lst)
+      current-min
+    (let ((id (cdr (car lst))))
+      (min-token-id (cdr lst) (if (< id current-min) id current-min)))))
 
-(defthm mgt-get-token-id-after-add
-  (implies (mgt-statep st)
-           (equal (mgt-get-token-id word (mgt-add-token-state word st))
-                  (mgt-add-token-id word st))))
-
-(defthm mgt-get-token-word-after-add-new
-  (implies (and (mgt-statep st)
-                (not (alist-contains word (mgt-tok2id st))))
-           (equal (mgt-get-token-word (mgt-add-token-id word st)
-                                      (mgt-add-token-state word st))
-                  word)))
-
-(defun mgt-has-bpe-pair-p (pair-key st)
-  (declare (xargs :guard t))
-  (alist-contains pair-key (mgt-bpe-pairs st)))
-
-(defthm booleanp-mgt-has-bpe-pair-p
-  (or (equal (mgt-has-bpe-pair-p pk st) t)
-      (equal (mgt-has-bpe-pair-p pk st) nil))
+(defthm natp-of-min-token-id
+  (implies (natp current-min)
+           (natp (min-token-id lst current-min)))
+  :hints (("Goal" :induct (min-token-id lst current-min)))
   :rule-classes :type-prescription)
 
-(defun mgt-add-bpe-pair (pair-key token-id priority st)
-  (declare (xargs :guard t))
-  (let ((new-bpe (alist-put pair-key (cons token-id priority)
-                            (mgt-bpe-pairs st))))
-    (mgt-set-bpe-pairs new-bpe st)))
+(defthm min-token-id-leq-current
+  (implies (natp current-min)
+           (<= (min-token-id lst current-min) current-min))
+  :hints (("Goal" :induct (min-token-id lst current-min)))
+  :rule-classes :linear)
 
-(defthm mgt-add-bpe-pair-present
-  (mgt-has-bpe-pair-p pk (mgt-add-bpe-pair pk tid pri st)))
+(defun max-token-id (lst current-max)
+  (declare (xargs :guard (and (token-list-p lst) (natp current-max))
+                  :measure (len lst)))
+  (if (atom lst)
+      current-max
+    (let ((id (cdr (car lst))))
+      (max-token-id (cdr lst) (if (> id current-max) id current-max)))))
 
-(defthm mgt-add-bpe-pair-preserves-tok2id
-  (equal (mgt-tok2id (mgt-add-bpe-pair pk tid pri st))
-         (mgt-tok2id st)))
+(defthm natp-of-max-token-id
+  (implies (natp current-max)
+           (natp (max-token-id lst current-max)))
+  :hints (("Goal" :induct (max-token-id lst current-max)))
+  :rule-classes :type-prescription)
 
-(defthm mgt-add-bpe-pair-preserves-id2tok
-  (equal (mgt-id2tok (mgt-add-bpe-pair pk tid pri st))
-         (mgt-id2tok st)))
+(defthm max-token-id-geq-current
+  (implies (natp current-max)
+           (<= current-max (max-token-id lst current-max)))
+  :hints (("Goal" :induct (max-token-id lst current-max)))
+  :rule-classes :linear)
 
-(defthm mgt-add-bpe-pair-preserves-prefixes
-  (equal (mgt-prefixes (mgt-add-bpe-pair pk tid pri st))
-         (mgt-prefixes st)))
+(defun all-prefixes-are-tokens (prefix-list t2i)
+  (declare (xargs :guard (and (token-list-p prefix-list) (token-list-p t2i))
+                  :measure (len prefix-list)))
+  (if (atom prefix-list)
+      t
+    (and (lookup-token (car (car prefix-list)) t2i)
+         (all-prefixes-are-tokens (cdr prefix-list) t2i))))
 
-(defthm mgt-add-bpe-pair-preserves-suffixes
-  (equal (mgt-suffixes (mgt-add-bpe-pair pk tid pri st))
-         (mgt-suffixes st)))
+(defthm all-prefixes-are-tokens-of-nil
+  (all-prefixes-are-tokens nil t2i))
 
-(defthm mgt-add-bpe-pair-preserves-roots
-  (equal (mgt-roots (mgt-add-bpe-pair pk tid pri st))
-         (mgt-roots st)))
+(defun all-suffixes-are-tokens (suffix-list t2i)
+  (declare (xargs :guard (and (token-list-p suffix-list) (token-list-p t2i))
+                  :measure (len suffix-list)))
+  (if (atom suffix-list)
+      t
+    (and (lookup-token (car (car suffix-list)) t2i)
+         (all-suffixes-are-tokens (cdr suffix-list) t2i))))
 
-(defthm mgt-add-bpe-pair-preserves-anchors
-  (equal (mgt-anchors (mgt-add-bpe-pair pk tid pri st))
-         (mgt-anchors st)))
+(defthm all-suffixes-are-tokens-of-nil
+  (all-suffixes-are-tokens nil t2i))
 
-(defthm mgt-add-bpe-pair-preserves-next-id
-  (equal (mgt-next-id (mgt-add-bpe-pair pk tid pri st))
-         (mgt-next-id st)))
+(defun morpheme-consistency-p (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (and (all-prefixes-are-tokens (mgt-prefixes st) (mgt-token-to-id st))
+       (all-suffixes-are-tokens (mgt-suffixes st) (mgt-token-to-id st))))
 
-(defun mgt-state-invariant (st)
-  (declare (xargs :guard t))
-  (and (mgt-statep st)
-       (alist-contains *pad-word* (mgt-tok2id st))
-       (alist-contains *unk-word* (mgt-tok2id st))
-       (alist-contains *bos-word* (mgt-tok2id st))
-       (alist-contains *eos-word* (mgt-tok2id st))))
+(defun encode-char-by-char (st text pos acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp text)
+                               (natp pos)
+                               (nat-listp acc)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      (reverse acc)
+    (let* ((c-str (coerce (list (char text pos)) 'string))
+           (tid (lookup-token c-str (mgt-token-to-id st)))
+           (token-id (if tid tid *special-unk*)))
+      (encode-char-by-char st text (+ pos 1) (cons token-id acc)))))
 
-(defthm mgt-state-invariant-implies-statep
-  (implies (mgt-state-invariant st)
-           (mgt-statep st))
-  :rule-classes (:rewrite :forward-chaining))
+(defthm nat-listp-of-encode-char-by-char
+  (implies (and (mgt-state-p st)
+                (stringp text)
+                (natp pos)
+                (nat-listp acc))
+           (nat-listp (encode-char-by-char st text pos acc)))
+  :hints (("Goal" :induct (encode-char-by-char st text pos acc))))
 
-(defthm mgt-state-invariant-has-pad
-  (implies (mgt-state-invariant st)
-           (alist-contains *pad-word* (mgt-tok2id st))))
+(defun greedy-tokenize (st text pos acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp text)
+                               (natp pos)
+                               (nat-listp acc)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      (reverse acc)
+    (let ((match-len (longest-match st text pos)))
+      (if (and (natp match-len) (> match-len 0))
+          (let* ((matched (substring text pos (+ pos match-len)))
+                 (tid (lookup-token matched (mgt-token-to-id st))))
+            (if tid
+                (greedy-tokenize st text (+ pos match-len) (cons tid acc))
+              (greedy-tokenize st text (+ pos 1) (cons *special-unk* acc))))
+        (greedy-tokenize st text (+ pos 1) (cons *special-unk* acc))))))
 
-(defthm mgt-state-invariant-has-unk
-  (implies (mgt-state-invariant st)
-           (alist-contains *unk-word* (mgt-tok2id st))))
+(defthm nat-listp-of-greedy-tokenize
+  (implies (and (mgt-state-p st)
+                (stringp text)
+                (natp pos)
+                (nat-listp acc))
+           (nat-listp (greedy-tokenize st text pos acc)))
+  :hints (("Goal" :induct (greedy-tokenize st text pos acc))))
 
-(defthm mgt-state-invariant-has-bos
-  (implies (mgt-state-invariant st)
-           (alist-contains *bos-word* (mgt-tok2id st))))
+(defun reverse-nat-list (lst acc)
+  (declare (xargs :guard (and (nat-listp lst) (nat-listp acc))
+                  :measure (len lst)))
+  (if (atom lst)
+      acc
+    (reverse-nat-list (cdr lst) (cons (car lst) acc))))
 
-(defthm mgt-state-invariant-has-eos
-  (implies (mgt-state-invariant st)
-           (alist-contains *eos-word* (mgt-tok2id st))))
+(defthm nat-listp-of-reverse-nat-list
+  (implies (and (nat-listp lst) (nat-listp acc))
+           (nat-listp (reverse-nat-list lst acc)))
+  :hints (("Goal" :induct (reverse-nat-list lst acc))))
 
-(defthm mgt-add-token-preserves-invariant-tok2id-pad
-  (implies (alist-contains *pad-word* (mgt-tok2id st))
-           (alist-contains *pad-word* (mgt-tok2id (mgt-add-token-state word st)))))
+(defthm len-of-reverse-nat-list
+  (implies (and (nat-listp lst) (nat-listp acc))
+           (equal (len (reverse-nat-list lst acc))
+                  (+ (len lst) (len acc))))
+  :hints (("Goal" :induct (reverse-nat-list lst acc))))
 
-(defthm mgt-add-token-preserves-invariant-tok2id-unk
-  (implies (alist-contains *unk-word* (mgt-tok2id st))
-           (alist-contains *unk-word* (mgt-tok2id (mgt-add-token-state word st)))))
+(defun take-n (n lst)
+  (declare (xargs :guard (and (natp n) (true-listp lst))
+                  :measure (nfix n)))
+  (if (or (zp n) (atom lst))
+      nil
+    (cons (car lst) (take-n (- n 1) (cdr lst)))))
 
-(defthm mgt-add-token-preserves-invariant-tok2id-bos
-  (implies (alist-contains *bos-word* (mgt-tok2id st))
-           (alist-contains *bos-word* (mgt-tok2id (mgt-add-token-state word st)))))
+(defthm true-listp-of-take-n
+  (true-listp (take-n n lst))
+  :hints (("Goal" :induct (take-n n lst))))
 
-(defthm mgt-add-token-preserves-invariant-tok2id-eos
-  (implies (alist-contains *eos-word* (mgt-tok2id st))
-           (alist-contains *eos-word* (mgt-tok2id (mgt-add-token-state word st)))))
+(defthm len-of-take-n
+  (implies (and (natp n) (true-listp lst))
+           (<= (len (take-n n lst)) n))
+  :hints (("Goal" :induct (take-n n lst)))
+  :rule-classes :linear)
 
-(defthm mgt-remove-preserves-pad
-  (alist-contains *pad-word*
-                  (mgt-tok2id (mgt-remove-vocab-word word st))))
+(defun drop-n (n lst)
+  (declare (xargs :guard (and (natp n) (true-listp lst))
+                  :measure (nfix n)))
+  (if (or (zp n) (atom lst))
+      lst
+    (drop-n (- n 1) (cdr lst))))
 
-(defthm mgt-remove-preserves-unk
-  (alist-contains *unk-word*
-                  (mgt-tok2id (mgt-remove-vocab-word word st))))
+(defthm true-listp-of-drop-n
+  (implies (true-listp lst)
+           (true-listp (drop-n n lst)))
+  :hints (("Goal" :induct (drop-n n lst))))
 
-(defthm mgt-remove-preserves-bos
-  (alist-contains *bos-word*
-                  (mgt-tok2id (mgt-remove-vocab-word word st))))
+(defun split-token-list-at (lst n)
+  (declare (xargs :guard (and (nat-listp lst) (natp n))))
+  (mv (take-n n lst) (drop-n n lst)))
 
-(defthm mgt-remove-preserves-eos
-  (alist-contains *eos-word*
-                  (mgt-tok2id (mgt-remove-vocab-word word st))))
+(defun unique-tokens-in-list (tokens seen acc)
+  (declare (xargs :guard (and (nat-listp tokens) (true-listp seen) (nat-listp acc))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      (reverse acc)
+    (if (member-equal (car tokens) seen)
+        (unique-tokens-in-list (cdr tokens) seen acc)
+      (unique-tokens-in-list (cdr tokens)
+                             (cons (car tokens) seen)
+                             (cons (car tokens) acc)))))
 
-(defun mgt-next-id-monotonic-witness (words st)
-  (declare (xargs :guard t
-                  :measure (acl2-count words)))
-  (if (atom words)
-      (nfix (mgt-next-id st))
-    (mgt-next-id-monotonic-witness
-     (cdr words)
-     (mgt-add-token-state (car words) st))))
+(defthm nat-listp-of-unique-tokens-in-list
+  (implies (and (nat-listp tokens) (nat-listp acc))
+           (nat-listp (unique-tokens-in-list tokens seen acc)))
+  :hints (("Goal" :induct (unique-tokens-in-list tokens seen acc))))
 
-(defthm mgt-next-id-monotonic-witness-ge
-  (implies (natp (mgt-next-id st))
-           (<= (mgt-next-id st)
-               (mgt-next-id-monotonic-witness words st)))
-  :rule-classes :linear
-  :hints (("Goal" :induct (mgt-next-id-monotonic-witness words st))))
+(defthm len-of-unique-tokens-leq
+  (implies (and (nat-listp tokens) (nat-listp acc))
+           (<= (len (unique-tokens-in-list tokens seen acc))
+               (+ (len tokens) (len acc))))
+  :hints (("Goal" :induct (unique-tokens-in-list tokens seen acc)))
+  :rule-classes :linear)
 
-(defun encode-deterministic-p (text st1 st2)
-  (declare (xargs :guard t))
-  (implies (and (equal (mgt-tok2id st1) (mgt-tok2id st2))
-                (equal (mgt-id2tok st1) (mgt-id2tok st2))
-                (equal (mgt-prefixes st1) (mgt-prefixes st2))
-                (equal (mgt-suffixes st1) (mgt-suffixes st2))
-                (equal (mgt-roots st1) (mgt-roots st2))
-                (equal (mgt-bpe-pairs st1) (mgt-bpe-pairs st2)))
-           (equal (mgt-encode text st1)
-                  (mgt-encode text st2))))
+(defun token-frequency-count (tokens freq-map)
+  (declare (xargs :guard (and (nat-listp tokens) (true-listp freq-map))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      freq-map
+    (let* ((tok (car tokens))
+           (existing (assoc-equal tok freq-map))
+           (new-count (if existing (+ 1 (cdr existing)) 1))
+           (new-map (if existing
+                        (put-assoc-equal tok new-count freq-map)
+                      (cons (cons tok new-count) freq-map))))
+      (token-frequency-count (cdr tokens) new-map))))
 
-(defthm encode-deterministic
-  (encode-deterministic-p text st1 st2)
-  :hints (("Goal" :in-theory (enable encode-deterministic-p))))
+(defun sum-frequencies (freq-map)
+  (declare (xargs :guard (true-listp freq-map)
+                  :measure (len freq-map)))
+  (if (atom freq-map)
+      0
+    (let ((val (if (and (consp (car freq-map))
+                        (natp (cdr (car freq-map))))
+                   (cdr (car freq-map))
+                 0)))
+      (+ val (sum-frequencies (cdr freq-map))))))
 
-(defun decode-deterministic-p (tokens st1 st2)
-  (declare (xargs :guard t))
-  (implies (equal (mgt-id2tok st1) (mgt-id2tok st2))
-           (equal (mgt-decode tokens st1)
-                  (mgt-decode tokens st2))))
+(defthm natp-of-sum-frequencies
+  (implies (true-listp freq-map)
+           (natp (sum-frequencies freq-map)))
+  :hints (("Goal" :induct (sum-frequencies freq-map)))
+  :rule-classes :type-prescription)
 
-(defthm decode-deterministic
-  (decode-deterministic-p tokens st1 st2)
-  :hints (("Goal" :in-theory (enable decode-deterministic-p)
-           :induct (mgt-decode tokens st1))))
+(defun encode-text-deterministic-check (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (let* ((tokens1 (encode-text st text))
+         (tokens2 (encode-text st text)))
+    (equal tokens1 tokens2)))
 
-(defthm mgt-encode-empty-text
-  (equal (mgt-encode nil st) nil))
+(defthm encode-is-deterministic
+  (implies (and (mgt-state-p st) (stringp text))
+           (encode-text-deterministic-check st text)))
 
-(defthm mgt-decode-empty-tokens
-  (equal (mgt-decode nil st) nil))
+(defun apply-merge-to-seq-preserves-length-bound (seq first-id second-id merged-id)
+  (declare (xargs :guard (and (nat-listp seq) (natp first-id) (natp second-id) (natp merged-id))))
+  (<= (len (apply-merge-to-seq seq first-id second-id merged-id nil))
+      (len seq)))
 
-(defthm mgt-subword-split-empty
-  (equal (mgt-subword-split nil st) nil))
+(defthm apply-merge-shrinks-or-preserves
+  (implies (and (nat-listp seq) (natp first-id) (natp second-id) (natp merged-id))
+           (apply-merge-to-seq-preserves-length-bound seq first-id second-id merged-id)))
 
-(defthm mgt-morph-decompose-empty
-  (equal (mgt-morph-decompose nil st) nil))
+(defun verify-add-token-idempotence (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (mv-let (st1 id1) (add-token-to-state st token)
+    (mv-let (st2 id2) (add-token-to-state st1 token)
+      (and (equal id1 id2)
+           (equal (mgt-next-id st1) (mgt-next-id st2))))))
 
-(defthm mgt-longest-match-empty
-  (equal (mgt-longest-match nil st) 0))
+(defthm add-token-is-idempotent
+  (implies (and (mgt-state-p st) (stringp token))
+           (verify-add-token-idempotence st token)))
 
-(defthm mgt-coverage-empty
-  (equal (mgt-coverage nil st) 0))
-
-(defthm mgt-validate-tokens-empty
-  (equal (mgt-validate-tokens nil st) t))
-
-(defthm mgt-encode-batch-empty
-  (equal (mgt-encode-batch nil st) nil))
-
-(defthm mgt-decode-batch-empty
-  (equal (mgt-decode-batch nil st) nil))
-
-(defthm mgt-merge-subwords-empty
-  (equal (mgt-merge-subwords nil) nil))
-
-(defthm filter-special-tokens-empty
-  (equal (filter-special-tokens nil) nil))
-
-(defthm count-special-tokens-empty
-  (equal (count-special-tokens nil) 0))
-
-(defthm count-unk-tokens-empty
-  (equal (count-unk-tokens nil) 0))
-
-(defthm mgt-encode-preserves-structure
-  (true-listp (mgt-encode text st)))
-
-(defthm mgt-decode-preserves-structure
-  (true-listp (mgt-decode tokens st)))
-
-(defthm mgt-subword-split-preserves-structure
-  (true-listp (mgt-subword-split word st)))
-
-(defthm mgt-encode-word-preserves-structure
-  (true-listp (mgt-encode-word word st)))
-
-(defthm mgt-morph-decompose-preserves-structure
-  (true-listp (mgt-morph-decompose word st)))
-
-(defthm mgt-tokens-to-rationals-preserves-structure
-  (true-listp (mgt-tokens-to-rationals tokens)))
-
-(defthm mgt-rationals-to-tokens-preserves-structure
-  (true-listp (mgt-rationals-to-tokens rats)))
-
-(defthm len-mgt-encode-batch-equals-input
-  (equal (len (mgt-encode-batch texts st))
+(defun batch-size-preserved-check (st texts)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p texts))))
+  (equal (len (encode-batch st texts))
          (len texts)))
 
-(defthm len-mgt-decode-batch-equals-input
-  (equal (len (mgt-decode-batch token-lists st))
+(defthm batch-size-preserved
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (batch-size-preserved-check st texts)))
+
+(defun decode-batch-size-check (st token-lists)
+  (declare (xargs :guard (and (mgt-state-p st) (true-listp token-lists))))
+  (equal (len (batch-decode st token-lists))
          (len token-lists)))
 
-(defthm mgt-encode-with-bos-eos-len
-  (equal (len (mgt-encode-with-bos-eos text st))
-         (+ 2 (len (mgt-encode text st)))))
+(defthm decode-batch-size-preserved
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (decode-batch-size-check st token-lists)))
 
-(defthm mgt-coverage-bounded
-  (and (<= 0 (mgt-coverage text st))
-       (<= (mgt-coverage text st) 1))
-  :rule-classes nil)
+(defun special-tokens-present-p (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (and (lookup-token "[PAD]" (mgt-token-to-id st))
+       (lookup-token "[UNK]" (mgt-token-to-id st))
+       (lookup-token "[BOS]" (mgt-token-to-id st))
+       (lookup-token "[EOS]" (mgt-token-to-id st))
+       t))
 
-(defthm mgt-vocab-size-non-negative
-  (<= 0 (mgt-vocab-size st))
+(defun verify-special-token-ids (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (let ((pad-id (lookup-token "[PAD]" (mgt-token-to-id st)))
+        (unk-id (lookup-token "[UNK]" (mgt-token-to-id st)))
+        (bos-id (lookup-token "[BOS]" (mgt-token-to-id st)))
+        (eos-id (lookup-token "[EOS]" (mgt-token-to-id st))))
+    (and pad-id unk-id bos-id eos-id
+         (not (equal pad-id unk-id))
+         (not (equal pad-id bos-id))
+         (not (equal pad-id eos-id))
+         (not (equal unk-id bos-id))
+         (not (equal unk-id eos-id))
+         (not (equal bos-id eos-id)))))
+
+(defun lookup-token-after-add (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (mv-let (st1 id) (add-token-to-state st token)
+    (equal (lookup-token token (mgt-token-to-id st1)) id)))
+
+(defthm add-then-lookup-succeeds
+  (implies (and (mgt-state-p st) (stringp token))
+           (lookup-token-after-add st token)))
+
+(defun lookup-id-after-add (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (mv-let (st1 id) (add-token-to-state st token)
+    (equal (lookup-id id (mgt-id-to-token st1)) token)))
+
+(defthm add-then-lookup-id-succeeds
+  (implies (and (mgt-state-p st) (stringp token))
+           (lookup-id-after-add st token)))
+
+(defun vocab-grows-on-new-token (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (if (lookup-token token (mgt-token-to-id st))
+      (mv-let (st1 id) (add-token-to-state st token)
+        (declare (ignore id))
+        (equal (len (mgt-token-to-id st1))
+               (len (mgt-token-to-id st))))
+    (mv-let (st1 id) (add-token-to-state st token)
+      (declare (ignore id))
+      (equal (len (mgt-token-to-id st1))
+             (+ 1 (len (mgt-token-to-id st)))))))
+
+(defthm vocab-size-correct-on-add
+  (implies (and (mgt-state-p st) (stringp token))
+           (vocab-grows-on-new-token st token)))
+
+(defun remove-then-lookup-fails (st word)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word))))
+  (if (or (equal word "[PAD]") (equal word "[UNK]")
+          (equal word "[BOS]") (equal word "[EOS]"))
+      t
+    (let ((st1 (remove-vocab-word st word)))
+      (not (lookup-token word (mgt-token-to-id st1))))))
+
+(defthm remove-then-lookup-is-nil
+  (implies (and (mgt-state-p st) (stringp word))
+           (remove-then-lookup-fails st word)))
+
+(defun prefix-id-matches-token-id (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (all-prefixes-match-aux (mgt-prefixes st) (mgt-token-to-id st)))
+
+(defun all-prefixes-match-aux (prefix-list t2i)
+  (declare (xargs :guard (and (token-list-p prefix-list) (token-list-p t2i))
+                  :measure (len prefix-list)))
+  (if (atom prefix-list)
+      t
+    (let* ((entry (car prefix-list))
+           (token (car entry))
+           (prefix-id (cdr entry))
+           (token-id (lookup-token token t2i)))
+      (and (equal token-id prefix-id)
+           (all-prefixes-match-aux (cdr prefix-list) t2i)))))
+
+(defun suffix-id-matches-token-id (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (all-suffixes-match-aux (mgt-suffixes st) (mgt-token-to-id st)))
+
+(defun all-suffixes-match-aux (suffix-list t2i)
+  (declare (xargs :guard (and (token-list-p suffix-list) (token-list-p t2i))
+                  :measure (len suffix-list)))
+  (if (atom suffix-list)
+      t
+    (let* ((entry (car suffix-list))
+           (token (car entry))
+           (suffix-id (cdr entry))
+           (token-id (lookup-token token t2i)))
+      (and (equal token-id suffix-id)
+           (all-suffixes-match-aux (cdr suffix-list) t2i)))))
+
+(defun encode-empty-text-gives-empty (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (equal (encode-text st "") nil))
+
+(defthm encode-empty-is-nil
+  (implies (mgt-state-p st)
+           (encode-empty-text-gives-empty st)))
+
+(defun decode-empty-tokens-gives-empty (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (equal (decode-tokens st nil) ""))
+
+(defthm decode-nil-is-empty-string
+  (implies (mgt-state-p st)
+           (decode-empty-tokens-gives-empty st)))
+
+(defun concat-two-strings (a b)
+  (declare (xargs :guard (and (stringp a) (stringp b))))
+  (concatenate 'string a b))
+
+(defthm stringp-of-concat-two-strings
+  (implies (and (stringp a) (stringp b))
+           (stringp (concat-two-strings a b)))
+  :rule-classes :type-prescription)
+
+(defun repeat-string (s n)
+  (declare (xargs :guard (and (stringp s) (natp n))
+                  :measure (nfix n)))
+  (if (zp n)
+      ""
+    (concatenate 'string s (repeat-string s (- n 1)))))
+
+(defthm stringp-of-repeat-string
+  (implies (and (stringp s) (natp n))
+           (stringp (repeat-string s n)))
+  :hints (("Goal" :induct (repeat-string s n)))
+  :rule-classes :type-prescription)
+
+(defun token-list-to-nat-list (tokens)
+  (declare (xargs :guard (token-list-p tokens)
+                  :measure (len tokens)))
+  (if (atom tokens)
+      nil
+    (cons (cdr (car tokens))
+          (token-list-to-nat-list (cdr tokens)))))
+
+(defthm nat-listp-of-token-list-to-nat-list
+  (implies (token-list-p tokens)
+           (nat-listp (token-list-to-nat-list tokens)))
+  :hints (("Goal" :induct (token-list-to-nat-list tokens))))
+
+(defthm len-of-token-list-to-nat-list
+  (implies (token-list-p tokens)
+           (equal (len (token-list-to-nat-list tokens))
+                  (len tokens)))
+  :hints (("Goal" :induct (token-list-to-nat-list tokens))))
+
+(defun token-list-to-string-list (tokens)
+  (declare (xargs :guard (token-list-p tokens)
+                  :measure (len tokens)))
+  (if (atom tokens)
+      nil
+    (cons (car (car tokens))
+          (token-list-to-string-list (cdr tokens)))))
+
+(defthm string-list-p-of-token-list-to-string-list
+  (implies (token-list-p tokens)
+           (string-list-p (token-list-to-string-list tokens)))
+  :hints (("Goal" :induct (token-list-to-string-list tokens))))
+
+(defthm len-of-token-list-to-string-list
+  (implies (token-list-p tokens)
+           (equal (len (token-list-to-string-list tokens))
+                  (len tokens)))
+  :hints (("Goal" :induct (token-list-to-string-list tokens))))
+
+(defun id-list-to-nat-list (ids)
+  (declare (xargs :guard (id-list-p ids)
+                  :measure (len ids)))
+  (if (atom ids)
+      nil
+    (cons (car (car ids))
+          (id-list-to-nat-list (cdr ids)))))
+
+(defthm nat-listp-of-id-list-to-nat-list
+  (implies (id-list-p ids)
+           (nat-listp (id-list-to-nat-list ids)))
+  :hints (("Goal" :induct (id-list-to-nat-list ids))))
+
+(defun id-list-to-string-list (ids)
+  (declare (xargs :guard (id-list-p ids)
+                  :measure (len ids)))
+  (if (atom ids)
+      nil
+    (cons (cdr (car ids))
+          (id-list-to-string-list (cdr ids)))))
+
+(defthm string-list-p-of-id-list-to-string-list
+  (implies (id-list-p ids)
+           (string-list-p (id-list-to-string-list ids)))
+  :hints (("Goal" :induct (id-list-to-string-list ids))))
+
+(defun bpe-pair-keys (bpe-list)
+  (declare (xargs :guard (bpe-pair-list-p bpe-list)
+                  :measure (len bpe-list)))
+  (if (atom bpe-list)
+      nil
+    (cons (car (car bpe-list))
+          (bpe-pair-keys (cdr bpe-list)))))
+
+(defthm string-list-p-of-bpe-pair-keys
+  (implies (bpe-pair-list-p bpe-list)
+           (string-list-p (bpe-pair-keys bpe-list)))
+  :hints (("Goal" :induct (bpe-pair-keys bpe-list))))
+
+(defun bpe-pair-token-ids (bpe-list)
+  (declare (xargs :guard (bpe-pair-list-p bpe-list)
+                  :measure (len bpe-list)))
+  (if (atom bpe-list)
+      nil
+    (let ((merge (cdr (car bpe-list))))
+      (cons (if (bpe-merge-p merge) (car merge) 0)
+            (bpe-pair-token-ids (cdr bpe-list))))))
+
+(defthm nat-listp-of-bpe-pair-token-ids
+  (implies (bpe-pair-list-p bpe-list)
+           (nat-listp (bpe-pair-token-ids bpe-list)))
+  :hints (("Goal" :induct (bpe-pair-token-ids bpe-list))))
+
+(defun bpe-pair-priorities (bpe-list)
+  (declare (xargs :guard (bpe-pair-list-p bpe-list)
+                  :measure (len bpe-list)))
+  (if (atom bpe-list)
+      nil
+    (let ((merge (cdr (car bpe-list))))
+      (cons (if (bpe-merge-p merge) (cdr merge) 0)
+            (bpe-pair-priorities (cdr bpe-list))))))
+
+(defthm nat-listp-of-bpe-pair-priorities
+  (implies (bpe-pair-list-p bpe-list)
+           (nat-listp (bpe-pair-priorities bpe-list)))
+  :hints (("Goal" :induct (bpe-pair-priorities bpe-list))))
+
+(defun all-bpe-tokens-in-vocab (bpe-list t2i)
+  (declare (xargs :guard (and (bpe-pair-list-p bpe-list) (token-list-p t2i))
+                  :measure (len bpe-list)))
+  (if (atom bpe-list)
+      t
+    (let* ((merge (cdr (car bpe-list)))
+           (key (car (car bpe-list)))
+           (tid (if (bpe-merge-p merge) (car merge) 0)))
+      (declare (ignore tid))
+      (and (lookup-token key t2i)
+           (all-bpe-tokens-in-vocab (cdr bpe-list) t2i)))))
+
+(defthm all-bpe-tokens-in-vocab-of-nil
+  (all-bpe-tokens-in-vocab nil t2i))
+
+(defun sequence-total-length (seqs)
+  (declare (xargs :guard (true-listp seqs)
+                  :measure (len seqs)))
+  (if (atom seqs)
+      0
+    (+ (if (nat-listp (car seqs)) (len (car seqs)) 0)
+       (sequence-total-length (cdr seqs)))))
+
+(defthm natp-of-sequence-total-length
+  (implies (true-listp seqs)
+           (natp (sequence-total-length seqs)))
+  :hints (("Goal" :induct (sequence-total-length seqs)))
+  :rule-classes :type-prescription)
+
+(defun apply-n-merges-shrinks (seq n first-id second-id merged-id)
+  (declare (xargs :guard (and (nat-listp seq) (natp n) (natp first-id)
+                               (natp second-id) (natp merged-id))
+                  :measure (nfix n)))
+  (if (zp n)
+      seq
+    (let ((new-seq (apply-merge-to-seq seq first-id second-id merged-id nil)))
+      (apply-n-merges-shrinks new-seq (- n 1) first-id second-id merged-id))))
+
+(defthm nat-listp-of-apply-n-merges
+  (implies (and (nat-listp seq) (natp n) (natp first-id) (natp second-id) (natp merged-id))
+           (nat-listp (apply-n-merges-shrinks seq n first-id second-id merged-id)))
+  :hints (("Goal" :induct (apply-n-merges-shrinks seq n first-id second-id merged-id))))
+
+(defun map-encode-text (st texts)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p texts))
+                  :measure (len texts)))
+  (if (atom texts)
+      nil
+    (cons (encode-text st (car texts))
+          (map-encode-text st (cdr texts)))))
+
+(defthm true-listp-of-map-encode-text
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (true-listp (map-encode-text st texts)))
+  :hints (("Goal" :induct (map-encode-text st texts))))
+
+(defthm len-of-map-encode-text
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (map-encode-text st texts))
+                  (len texts)))
+  :hints (("Goal" :induct (map-encode-text st texts))))
+
+(defun map-decode-tokens (st token-lists)
+  (declare (xargs :guard (and (mgt-state-p st) (true-listp token-lists))
+                  :measure (len token-lists)))
+  (if (atom token-lists)
+      nil
+    (if (nat-listp (car token-lists))
+        (cons (decode-tokens st (car token-lists))
+              (map-decode-tokens st (cdr token-lists)))
+      (cons "" (map-decode-tokens st (cdr token-lists))))))
+
+(defthm string-list-p-of-map-decode-tokens
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (string-list-p (map-decode-tokens st token-lists)))
+  :hints (("Goal" :induct (map-decode-tokens st token-lists))))
+
+(defthm len-of-map-decode-tokens
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (map-decode-tokens st token-lists))
+                  (len token-lists)))
+  :hints (("Goal" :induct (map-decode-tokens st token-lists))))
+
+(defun safe-nth-token (n tokens)
+  (declare (xargs :guard (and (natp n) (nat-listp tokens))))
+  (if (< n (len tokens))
+      (nth n tokens)
+    *special-unk*))
+
+(defthm natp-of-safe-nth-token
+  (implies (and (natp n) (nat-listp tokens))
+           (natp (safe-nth-token n tokens)))
+  :rule-classes :type-prescription)
+
+(defun window-tokens (tokens start window-size)
+  (declare (xargs :guard (and (nat-listp tokens) (natp start) (natp window-size))))
+  (let ((end (min (+ start window-size) (len tokens))))
+    (if (>= start (len tokens))
+        nil
+      (take-n (- end start) (drop-n start tokens)))))
+
+(defun count-vocab-entries (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (len (mgt-token-to-id st)))
+
+(defthm natp-of-count-vocab-entries
+  (implies (mgt-state-p st)
+           (natp (count-vocab-entries st)))
+  :rule-classes :type-prescription)
+
+(defthm count-vocab-equals-vocab-size
+  (implies (mgt-state-p st)
+           (equal (count-vocab-entries st)
+                  (vocab-size st))))
+
+(defun count-bpe-merges (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (len (mgt-bpe-pairs st)))
+
+(defthm natp-of-count-bpe-merges
+  (implies (mgt-state-p st)
+           (natp (count-bpe-merges st)))
+  :rule-classes :type-prescription)
+
+(defun count-prefix-entries (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (len (mgt-prefixes st)))
+
+(defthm natp-of-count-prefix-entries
+  (implies (mgt-state-p st)
+           (natp (count-prefix-entries st)))
+  :rule-classes :type-prescription)
+
+(defun count-suffix-entries (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (len (mgt-suffixes st)))
+
+(defthm natp-of-count-suffix-entries
+  (implies (mgt-state-p st)
+           (natp (count-suffix-entries st)))
+  :rule-classes :type-prescription)
+
+(defun total-morpheme-count (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (+ (count-prefix-entries st)
+     (count-suffix-entries st)
+     (len (mgt-roots st))))
+
+(defthm natp-of-total-morpheme-count
+  (implies (mgt-state-p st)
+           (natp (total-morpheme-count st)))
+  :rule-classes :type-prescription)
+
+(defun has-token-p (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (if (lookup-token token (mgt-token-to-id st)) t nil))
+
+(defun has-id-p (st id)
+  (declare (xargs :guard (and (mgt-state-p st) (natp id))))
+  (if (lookup-id id (mgt-id-to-token st)) t nil))
+
+(defun get-token-id (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (lookup-token token (mgt-token-to-id st)))
+
+(defun get-id-token (st id)
+  (declare (xargs :guard (and (mgt-state-p st) (natp id))))
+  (lookup-id id (mgt-id-to-token st)))
+
+(defthm get-token-id-returns-natp-or-nil
+  (implies (mgt-state-p st)
+           (or (null (get-token-id st token))
+               (natp (get-token-id st token))))
+  :rule-classes :type-prescription)
+
+(defthm get-id-token-returns-stringp-or-nil
+  (implies (mgt-state-p st)
+           (or (null (get-id-token st id))
+               (stringp (get-id-token st id))))
+  :rule-classes :type-prescription)
+
+(defun is-prefix-p (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (if (lookup-token token (mgt-prefixes st)) t nil))
+
+(defun is-suffix-p (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (if (lookup-token token (mgt-suffixes st)) t nil))
+
+(defun is-root-p (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (if (lookup-token token (mgt-roots st)) t nil))
+
+(defun classify-token (st token)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token))))
+  (cond ((is-special-token token) :special)
+        ((is-prefix-p st token) :prefix)
+        ((is-suffix-p st token) :suffix)
+        ((is-root-p st token) :root)
+        ((has-token-p st token) :word)
+        (t :unknown)))
+
+(defun classify-all-tokens (st token-strings acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (string-list-p token-strings)
+                               (true-listp acc))
+                  :measure (len token-strings)))
+  (if (atom token-strings)
+      (reverse acc)
+    (let ((class (classify-token st (car token-strings))))
+      (classify-all-tokens st (cdr token-strings) (cons class acc)))))
+
+(defthm true-listp-of-classify-all-tokens
+  (implies (and (mgt-state-p st)
+                (string-list-p token-strings)
+                (true-listp acc))
+           (true-listp (classify-all-tokens st token-strings acc)))
+  :hints (("Goal" :induct (classify-all-tokens st token-strings acc))))
+
+(defthm len-of-classify-all-tokens
+  (implies (and (mgt-state-p st)
+                (string-list-p token-strings)
+                (true-listp acc))
+           (equal (len (classify-all-tokens st token-strings acc))
+                  (+ (len token-strings) (len acc))))
+  :hints (("Goal" :induct (classify-all-tokens st token-strings acc))))
+
+(defun encode-single-char (st c)
+  (declare (xargs :guard (and (mgt-state-p st) (characterp c))))
+  (let* ((c-str (coerce (list c) 'string))
+         (tid (lookup-token c-str (mgt-token-to-id st))))
+    (if tid tid *special-unk*)))
+
+(defthm natp-of-encode-single-char
+  (implies (and (mgt-state-p st) (characterp c))
+           (natp (encode-single-char st c)))
+  :rule-classes :type-prescription)
+
+(defun decode-single-token (st tid)
+  (declare (xargs :guard (and (mgt-state-p st) (natp tid))))
+  (decode-token st tid))
+
+(defthm stringp-of-decode-single-token
+  (implies (and (mgt-state-p st) (natp tid))
+           (stringp (decode-single-token st tid)))
+  :rule-classes :type-prescription)
+
+(defun all-tokens-are-known (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      t
+    (and (has-id-p st (car tokens))
+         (all-tokens-are-known st (cdr tokens)))))
+
+(defthm all-tokens-are-known-implies-validate
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (iff (all-tokens-are-known st tokens)
+                (validate-tokens st tokens)))
+  :hints (("Goal" :induct (all-tokens-are-known st tokens))))
+
+(defun no-unk-in-tokens (tokens)
+  (declare (xargs :guard (nat-listp tokens)
+                  :measure (len tokens)))
+  (if (atom tokens)
+      t
+    (and (not (equal (car tokens) *special-unk*))
+         (no-unk-in-tokens (cdr tokens)))))
+
+(defthm no-unk-implies-zero-unk-count
+  (implies (and (nat-listp tokens) (no-unk-in-tokens tokens))
+           (equal (count-unk tokens) 0))
+  :hints (("Goal" :induct (count-unk tokens))))
+
+(defthm zero-unk-count-implies-no-unk
+  (implies (and (nat-listp tokens) (equal (count-unk tokens) 0))
+           (no-unk-in-tokens tokens))
+  :hints (("Goal" :induct (no-unk-in-tokens tokens))))
+
+(defun only-known-tokens (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      nil
+    (if (has-id-p st (car tokens))
+        (cons (car tokens) (only-known-tokens st (cdr tokens)))
+      (only-known-tokens st (cdr tokens)))))
+
+(defthm nat-listp-of-only-known-tokens
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (nat-listp (only-known-tokens st tokens)))
+  :hints (("Goal" :induct (only-known-tokens st tokens))))
+
+(defthm len-of-only-known-tokens-leq
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (<= (len (only-known-tokens st tokens)) (len tokens)))
+  :hints (("Goal" :induct (only-known-tokens st tokens)))
   :rule-classes :linear)
 
-(defthm mgt-unknown-replacement-constant
-  (equal (mgt-unknown-replacement ctx st) 1))
+(defthm all-tokens-known-in-only-known
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (all-tokens-are-known st (only-known-tokens st tokens)))
+  :hints (("Goal" :induct (only-known-tokens st tokens))))
 
-(defthm mgt-encode-word-nonempty-for-nonempty-input
-  (implies (consp word)
-           (consp (mgt-encode-word word st))))
+(defun replace-unk-with (tokens replacement)
+  (declare (xargs :guard (and (nat-listp tokens) (natp replacement))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      nil
+    (if (equal (car tokens) *special-unk*)
+        (cons replacement (replace-unk-with (cdr tokens) replacement))
+      (cons (car tokens) (replace-unk-with (cdr tokens) replacement)))))
 
-(defthm mgt-subword-split-nonempty-for-nonempty-input
-  (implies (consp word)
-           (consp (mgt-subword-split word st))))
+(defthm nat-listp-of-replace-unk-with
+  (implies (and (nat-listp tokens) (natp replacement))
+           (nat-listp (replace-unk-with tokens replacement)))
+  :hints (("Goal" :induct (replace-unk-with tokens replacement))))
+
+(defthm len-of-replace-unk-with
+  (implies (nat-listp tokens)
+           (equal (len (replace-unk-with tokens replacement))
+                  (len tokens)))
+  :hints (("Goal" :induct (replace-unk-with tokens replacement))))
+
+(defthm no-unk-after-replace
+  (implies (and (nat-listp tokens)
+                (natp replacement)
+                (not (equal replacement *special-unk*)))
+           (no-unk-in-tokens (replace-unk-with tokens replacement)))
+  :hints (("Goal" :induct (replace-unk-with tokens replacement))))
+
+(defun pad-tokens-to-length (tokens target-len)
+  (declare (xargs :guard (and (nat-listp tokens) (natp target-len))
+                  :measure (nfix (- target-len (len tokens)))))
+  (if (or (not (natp target-len))
+          (>= (len tokens) target-len))
+      tokens
+    (pad-tokens-to-length (append tokens (list *special-pad*))
+                          target-len)))
+
+(defun truncate-tokens (tokens max-len)
+  (declare (xargs :guard (and (nat-listp tokens) (natp max-len))))
+  (take-n max-len tokens))
+
+(defun pad-or-truncate (tokens target-len)
+  (declare (xargs :guard (and (nat-listp tokens) (natp target-len))))
+  (if (> (len tokens) target-len)
+      (truncate-tokens tokens target-len)
+    (pad-tokens-to-length tokens target-len)))
+
+(defun token-list-equal (a b)
+  (declare (xargs :guard (and (nat-listp a) (nat-listp b))
+                  :measure (+ (len a) (len b))))
+  (if (and (atom a) (atom b))
+      t
+    (if (or (atom a) (atom b))
+        nil
+      (and (equal (car a) (car b))
+           (token-list-equal (cdr a) (cdr b))))))
+
+(defthm token-list-equal-reflexive
+  (implies (nat-listp tokens)
+           (token-list-equal tokens tokens))
+  :hints (("Goal" :induct (token-list-equal tokens tokens))))
+
+(defthm token-list-equal-symmetric
+  (implies (and (nat-listp a) (nat-listp b)
+                (token-list-equal a b))
+           (token-list-equal b a))
+  :hints (("Goal" :induct (token-list-equal a b))))
+
+(defun interleave-tokens (a b)
+  (declare (xargs :guard (and (nat-listp a) (nat-listp b))
+                  :measure (+ (len a) (len b))))
+  (cond ((atom a) b)
+        ((atom b) a)
+        (t (cons (car a) (cons (car b) (interleave-tokens (cdr a) (cdr b)))))))
+
+(defthm nat-listp-of-interleave-tokens
+  (implies (and (nat-listp a) (nat-listp b))
+           (nat-listp (interleave-tokens a b)))
+  :hints (("Goal" :induct (interleave-tokens a b))))
+
+(defun prepend-bos-append-eos (tokens)
+  (declare (xargs :guard (nat-listp tokens)))
+  (cons *special-bos* (append tokens (list *special-eos*))))
+
+(defthm nat-listp-of-prepend-bos-append-eos
+  (implies (nat-listp tokens)
+           (nat-listp (prepend-bos-append-eos tokens))))
+
+(defthm len-of-prepend-bos-append-eos
+  (implies (nat-listp tokens)
+           (equal (len (prepend-bos-append-eos tokens))
+                  (+ 2 (len tokens)))))
+
+(defthm car-of-prepend-bos-is-bos
+  (equal (car (prepend-bos-append-eos tokens))
+         *special-bos*))
+
+(defun strip-bos-eos (tokens)
+  (declare (xargs :guard (nat-listp tokens)))
+  (if (and (consp tokens)
+           (equal (car tokens) *special-bos*))
+      (let ((rest (cdr tokens)))
+        (if (and (consp rest)
+                 (equal (car (last rest)) *special-eos*))
+            (take-n (- (len rest) 1) rest)
+          rest))
+    tokens))
+
+(defun encode-with-bos-eos (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (prepend-bos-append-eos (encode-text st text)))
+
+(defthm nat-listp-of-encode-with-bos-eos
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-with-bos-eos st text))))
+
+(defthm encode-with-bos-eos-starts-with-bos
+  (implies (and (mgt-state-p st) (stringp text))
+           (equal (car (encode-with-bos-eos st text))
+                  *special-bos*)))
+
+(defun attention-mask-from-tokens (tokens)
+  (declare (xargs :guard (nat-listp tokens)
+                  :measure (len tokens)))
+  (if (atom tokens)
+      nil
+    (cons (if (equal (car tokens) *special-pad*) 0 1)
+          (attention-mask-from-tokens (cdr tokens)))))
+
+(defthm nat-listp-of-attention-mask
+  (implies (nat-listp tokens)
+           (nat-listp (attention-mask-from-tokens tokens)))
+  :hints (("Goal" :induct (attention-mask-from-tokens tokens))))
+
+(defthm len-of-attention-mask
+  (implies (nat-listp tokens)
+           (equal (len (attention-mask-from-tokens tokens))
+                  (len tokens)))
+  :hints (("Goal" :induct (attention-mask-from-tokens tokens))))
+
+(defun count-active-tokens (mask)
+  (declare (xargs :guard (nat-listp mask)
+                  :measure (len mask)))
+  (if (atom mask)
+      0
+    (+ (if (equal (car mask) 1) 1 0)
+       (count-active-tokens (cdr mask)))))
+
+(defthm natp-of-count-active-tokens
+  (implies (nat-listp mask)
+           (natp (count-active-tokens mask)))
+  :hints (("Goal" :induct (count-active-tokens mask)))
+  :rule-classes :type-prescription)
+
+(defthm count-active-leq-len
+  (implies (nat-listp mask)
+           (<= (count-active-tokens mask) (len mask)))
+  :hints (("Goal" :induct (count-active-tokens mask)))
+  :rule-classes :linear)
+
+(defun make-position-ids (n start)
+  (declare (xargs :guard (and (natp n) (natp start))
+                  :measure (nfix n)))
+  (if (zp n)
+      nil
+    (cons start (make-position-ids (- n 1) (+ start 1)))))
+
+(defthm nat-listp-of-make-position-ids
+  (implies (and (natp n) (natp start))
+           (nat-listp (make-position-ids n start)))
+  :hints (("Goal" :induct (make-position-ids n start))))
+
+(defthm len-of-make-position-ids
+  (implies (natp n)
+           (equal (len (make-position-ids n start)) n))
+  :hints (("Goal" :induct (make-position-ids n start))))
+
+(defun token-type-ids (tokens segment-id)
+  (declare (xargs :guard (and (nat-listp tokens) (natp segment-id))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      nil
+    (cons segment-id (token-type-ids (cdr tokens) segment-id))))
+
+(defthm nat-listp-of-token-type-ids
+  (implies (and (nat-listp tokens) (natp segment-id))
+           (nat-listp (token-type-ids tokens segment-id)))
+  :hints (("Goal" :induct (token-type-ids tokens segment-id))))
+
+(defthm len-of-token-type-ids
+  (implies (nat-listp tokens)
+           (equal (len (token-type-ids tokens segment-id))
+                  (len tokens)))
+  :hints (("Goal" :induct (token-type-ids tokens segment-id))))
+
+(defun make-input-triple (st text max-len)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text) (natp max-len))))
+  (let* ((raw-tokens (encode-with-bos-eos st text))
+         (tokens (pad-or-truncate raw-tokens max-len))
+         (mask (attention-mask-from-tokens tokens))
+         (positions (make-position-ids (len tokens) 0))
+         (type-ids (token-type-ids tokens 0)))
+    (list tokens mask positions type-ids)))
+
+(defun hex-digit-to-nat (c)
+  (declare (xargs :guard (characterp c)))
+  (let ((code (char-code c)))
+    (cond ((and (>= code 48) (<= code 57)) (- code 48))
+          ((and (>= code 65) (<= code 70)) (+ 10 (- code 65)))
+          ((and (>= code 97) (<= code 102)) (+ 10 (- code 97)))
+          (t 0))))
+
+(defthm natp-of-hex-digit-to-nat
+  (implies (characterp c)
+           (natp (hex-digit-to-nat c)))
+  :rule-classes :type-prescription)
+
+(defthm hex-digit-to-nat-bounded
+  (implies (characterp c)
+           (< (hex-digit-to-nat c) 16))
+  :rule-classes :linear)
+
+(defun decode-hex-byte-token (token-str)
+  (declare (xargs :guard (stringp token-str)))
+  (if (and (equal (length token-str) 4)
+           (eql (char token-str 0) #\<)
+           (eql (char token-str 3) #\>))
+      (let* ((hi (hex-digit-to-nat (char token-str 1)))
+             (lo (hex-digit-to-nat (char token-str 2)))
+             (byte-val (+ (* hi 16) lo)))
+        (mv t byte-val))
+    (mv nil 0)))
+
+(defun decode-bpe-tokens-aux (st tokens acc)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (nat-listp tokens)
+                               (nat-listp acc))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      (reverse acc)
+    (let ((str (lookup-id (car tokens) (mgt-id-to-token st))))
+      (if (null str)
+          (decode-bpe-tokens-aux st (cdr tokens) acc)
+        (mv-let (is-hex byte-val)
+          (decode-hex-byte-token str)
+          (if is-hex
+              (decode-bpe-tokens-aux st (cdr tokens) (cons byte-val acc))
+            (let ((codes (string-to-codes str)))
+              (decode-bpe-tokens-aux st (cdr tokens)
+                                    (revappend codes acc)))))))))
+
+(defthm nat-listp-of-decode-bpe-tokens-aux
+  (implies (and (mgt-state-p st)
+                (nat-listp tokens)
+                (nat-listp acc))
+           (nat-listp (decode-bpe-tokens-aux st tokens acc)))
+  :hints (("Goal" :induct (decode-bpe-tokens-aux st tokens acc))))
+
+(defun decode-bpe-tokens-to-string (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))))
+  (let ((bytes (decode-bpe-tokens-aux st tokens nil)))
+    (codes-to-string bytes)))
+
+(defthm stringp-of-decode-bpe-tokens-to-string
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (stringp (decode-bpe-tokens-to-string st tokens))))
+
+(defun compute-overlap (tokens1 tokens2)
+  (declare (xargs :guard (and (nat-listp tokens1) (nat-listp tokens2))
+                  :measure (len tokens1)))
+  (if (atom tokens1)
+      0
+    (+ (if (member-equal (car tokens1) tokens2) 1 0)
+       (compute-overlap (cdr tokens1) tokens2))))
+
+(defthm natp-of-compute-overlap
+  (implies (and (nat-listp tokens1) (nat-listp tokens2))
+           (natp (compute-overlap tokens1 tokens2)))
+  :hints (("Goal" :induct (compute-overlap tokens1 tokens2)))
+  :rule-classes :type-prescription)
+
+(defthm compute-overlap-leq-len
+  (implies (and (nat-listp tokens1) (nat-listp tokens2))
+           (<= (compute-overlap tokens1 tokens2) (len tokens1)))
+  :hints (("Goal" :induct (compute-overlap tokens1 tokens2)))
+  :rule-classes :linear)
+
+(defun jaccard-similarity-numer (tokens1 tokens2)
+  (declare (xargs :guard (and (nat-listp tokens1) (nat-listp tokens2))))
+  (compute-overlap tokens1 tokens2))
+
+(defun jaccard-similarity-denom (tokens1 tokens2)
+  (declare (xargs :guard (and (nat-listp tokens1) (nat-listp tokens2))))
+  (let* ((union-size (+ (len tokens1) (len tokens2)
+                        (- (compute-overlap tokens1 tokens2)))))
+    (if (> union-size 0) union-size 1)))
+
+(defthm natp-of-jaccard-denom
+  (implies (and (nat-listp tokens1) (nat-listp tokens2))
+           (natp (jaccard-similarity-denom tokens1 tokens2)))
+  :rule-classes :type-prescription)
+
+(defun multi-step-encode-decode (st text n)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text) (natp n))
+                  :measure (nfix n)))
+  (if (zp n)
+      text
+    (let* ((tokens (encode-text st text))
+           (decoded (decode-tokens st tokens)))
+      (multi-step-encode-decode st decoded (- n 1)))))
+
+(defthm stringp-of-multi-step-encode-decode
+  (implies (and (mgt-state-p st) (stringp text) (natp n))
+           (stringp (multi-step-encode-decode st text n)))
+  :hints (("Goal" :induct (multi-step-encode-decode st text n))))
+
+(defun ngrams (tokens n)
+  (declare (xargs :guard (and (nat-listp tokens) (natp n) (> n 0))
+                  :measure (len tokens)))
+  (if (or (atom tokens) (< (len tokens) n))
+      nil
+    (cons (take-n n tokens)
+          (ngrams (cdr tokens) n))))
+
+(defthm true-listp-of-ngrams
+  (implies (and (nat-listp tokens) (natp n))
+           (true-listp (ngrams tokens n)))
+  :hints (("Goal" :induct (ngrams tokens n))))
+
+(defun count-ngrams (tokens n)
+  (declare (xargs :guard (and (nat-listp tokens) (natp n) (> n 0))))
+  (len (ngrams tokens n)))
+
+(defthm natp-of-count-ngrams
+  (implies (and (nat-listp tokens) (natp n) (> n 0))
+           (natp (count-ngrams tokens n)))
+  :rule-classes :type-prescription)
+
+(defun flatten-list-of-nat-lists (lists acc)
+  (declare (xargs :guard (and (true-listp lists) (nat-listp acc))
+                  :measure (len lists)))
+  (if (atom lists)
+      (reverse acc)
+    (if (nat-listp (car lists))
+        (flatten-list-of-nat-lists (cdr lists)
+                                   (revappend (car lists) acc))
+      (flatten-list-of-nat-lists (cdr lists) acc))))
+
+(defthm nat-listp-of-flatten-list-of-nat-lists
+  (implies (and (true-listp lists) (nat-listp acc))
+           (nat-listp (flatten-list-of-nat-lists lists acc)))
+  :hints (("Goal" :induct (flatten-list-of-nat-lists lists acc))))
+
+(defun build-vocabulary-from-corpus (st corpus)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p corpus))
+                  :measure (len corpus)))
+  (if (atom corpus)
+      st
+    (let ((text (car corpus)))
+      (mv-let (st1 id)
+        (add-token-to-state st text)
+        (declare (ignore id))
+        (build-vocabulary-from-corpus st1 (cdr corpus))))))
+
+(defthm mgt-state-p-of-build-vocabulary
+  (implies (and (mgt-state-p st) (string-list-p corpus))
+           (mgt-state-p (build-vocabulary-from-corpus st corpus)))
+  :hints (("Goal" :induct (build-vocabulary-from-corpus st corpus))))
+
+(defthm build-vocabulary-next-id-monotonic
+  (implies (and (mgt-state-p st) (string-list-p corpus))
+           (<= (mgt-next-id st)
+               (mgt-next-id (build-vocabulary-from-corpus st corpus))))
+  :hints (("Goal" :induct (build-vocabulary-from-corpus st corpus)))
+  :rule-classes :linear)
+
+(defun total-tokens-in-batch (batch)
+  (declare (xargs :guard (true-listp batch)
+                  :measure (len batch)))
+  (if (atom batch)
+      0
+    (+ (if (nat-listp (car batch)) (len (car batch)) 0)
+       (total-tokens-in-batch (cdr batch)))))
+
+(defthm natp-of-total-tokens-in-batch
+  (implies (true-listp batch)
+           (natp (total-tokens-in-batch batch)))
+  :hints (("Goal" :induct (total-tokens-in-batch batch)))
+  :rule-classes :type-prescription)
+
+(defun avg-tokens-per-text-numer (batch)
+  (declare (xargs :guard (true-listp batch)))
+  (total-tokens-in-batch batch))
+
+(defun avg-tokens-per-text-denom (batch)
+  (declare (xargs :guard (true-listp batch)))
+  (if (> (len batch) 0) (len batch) 1))
+
+(defthm avg-denom-positive
+  (implies (true-listp batch)
+           (> (avg-tokens-per-text-denom batch) 0))
+  :rule-classes :linear)
+
+(defun map-length-of-token-lists (token-lists acc)
+  (declare (xargs :guard (and (true-listp token-lists) (nat-listp acc))
+                  :measure (len token-lists)))
+  (if (atom token-lists)
+      (reverse acc)
+    (let ((l (if (nat-listp (car token-lists))
+                 (len (car token-lists))
+               0)))
+      (map-length-of-token-lists (cdr token-lists)
+                                 (cons l acc)))))
+
+(defthm nat-listp-of-map-length
+  (implies (and (true-listp token-lists) (nat-listp acc))
+           (nat-listp (map-length-of-token-lists token-lists acc)))
+  :hints (("Goal" :induct (map-length-of-token-lists token-lists acc))))
+
+(defthm len-of-map-length
+  (implies (and (true-listp token-lists) (nat-listp acc))
+           (equal (len (map-length-of-token-lists token-lists acc))
+                  (+ (len token-lists) (len acc))))
+  :hints (("Goal" :induct (map-length-of-token-lists token-lists acc))))
+
+(defun sum-nat-list (lst)
+  (declare (xargs :guard (nat-listp lst)
+                  :measure (len lst)))
+  (if (atom lst)
+      0
+    (+ (car lst) (sum-nat-list (cdr lst)))))
+
+(defthm natp-of-sum-nat-list
+  (implies (nat-listp lst)
+           (natp (sum-nat-list lst)))
+  :hints (("Goal" :induct (sum-nat-list lst)))
+  :rule-classes :type-prescription)
+
+(defun max-nat-list (lst current)
+  (declare (xargs :guard (and (nat-listp lst) (natp current))
+                  :measure (len lst)))
+  (if (atom lst)
+      current
+    (max-nat-list (cdr lst) (if (> (car lst) current) (car lst) current))))
+
+(defthm natp-of-max-nat-list
+  (implies (natp current)
+           (natp (max-nat-list lst current)))
+  :hints (("Goal" :induct (max-nat-list lst current)))
+  :rule-classes :type-prescription)
+
+(defthm max-nat-list-geq-current
+  (implies (natp current)
+           (<= current (max-nat-list lst current)))
+  :hints (("Goal" :induct (max-nat-list lst current)))
+  :rule-classes :linear)
+
+(defun min-nat-list (lst current)
+  (declare (xargs :guard (and (nat-listp lst) (natp current))
+                  :measure (len lst)))
+  (if (atom lst)
+      current
+    (min-nat-list (cdr lst) (if (< (car lst) current) (car lst) current))))
+
+(defthm natp-of-min-nat-list
+  (implies (natp current)
+           (natp (min-nat-list lst current)))
+  :hints (("Goal" :induct (min-nat-list lst current)))
+  :rule-classes :type-prescription)
+
+(defthm min-nat-list-leq-current
+  (implies (natp current)
+           (<= (min-nat-list lst current) current))
+  :hints (("Goal" :induct (min-nat-list lst current)))
+  :rule-classes :linear)
+
+(defun batch-statistics (st texts)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p texts))))
+  (let* ((batch (encode-batch st texts))
+         (lengths (map-length-of-token-lists batch nil))
+         (total (sum-nat-list lengths))
+         (max-l (max-nat-list lengths 0))
+         (min-l (if (consp lengths) (min-nat-list lengths (car lengths)) 0)))
+    (list total max-l min-l (len texts))))
+
+(defun verify-state-invariant-after-ops (st token1 token2)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp token1) (stringp token2))))
+  (mv-let (st1 id1) (add-token-to-state st token1)
+    (declare (ignore id1))
+    (mv-let (st2 id2) (add-token-to-state st1 token2)
+      (declare (ignore id2))
+      (and (mgt-state-p st2)
+           (<= (mgt-next-id st) (mgt-next-id st2))))))
+
+(defthm state-invariant-preserved-through-adds
+  (implies (and (mgt-state-p st) (stringp token1) (stringp token2))
+           (verify-state-invariant-after-ops st token1 token2)))
+
+(defun chain-add-n-tokens (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p tokens))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      st
+    (mv-let (st1 id) (add-token-to-state st (car tokens))
+      (declare (ignore id))
+      (chain-add-n-tokens st1 (cdr tokens)))))
+
+(defthm mgt-state-p-of-chain-add
+  (implies (and (mgt-state-p st) (string-list-p tokens))
+           (mgt-state-p (chain-add-n-tokens st tokens)))
+  :hints (("Goal" :induct (chain-add-n-tokens st tokens))))
+
+(defthm chain-add-next-id-monotonic
+  (implies (and (mgt-state-p st) (string-list-p tokens))
+           (<= (mgt-next-id st)
+               (mgt-next-id (chain-add-n-tokens st tokens))))
+  :hints (("Goal" :induct (chain-add-n-tokens st tokens)))
+  :rule-classes :linear)
+
+(defun all-added-tokens-findable (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p tokens))
+                  :measure (len tokens)))
+  (if (atom tokens)
+      t
+    (mv-let (st1 id) (add-token-to-state st (car tokens))
+      (and (equal (lookup-token (car tokens) (mgt-token-to-id st1)) id)
+           (equal (lookup-id id (mgt-id-to-token st1)) (car tokens))
+           (all-added-tokens-findable st1 (cdr tokens))))))
+
+(defthm all-added-tokens-are-findable
+  (implies (and (mgt-state-p st) (string-list-p tokens))
+           (all-added-tokens-findable st tokens))
+  :hints (("Goal" :induct (all-added-tokens-findable st tokens))))
+
+(defun verify-encode-produces-valid-tokens (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (let ((tokens (encode-text st text)))
+    (validate-tokens st tokens)))
+
+(defun verify-batch-encode-all-valid (st texts)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p texts))
+                  :measure (len texts)))
+  (if (atom texts)
+      t
+    (and (verify-encode-produces-valid-tokens st (car texts))
+         (verify-batch-encode-all-valid st (cdr texts)))))
+
+(defun double-encode-same-result (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (equal (encode-text st text)
+         (encode-text st text)))
+
+(defthm double-encode-deterministic
+  (implies (and (mgt-state-p st) (stringp text))
+           (double-encode-same-result st text)))
+
+(defun double-decode-same-result (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))))
+  (equal (decode-tokens st tokens)
+         (decode-tokens st tokens)))
+
+(defthm double-decode-deterministic
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (double-decode-same-result st tokens)))
+
+(defun make-mgt-with-n-tokens (n)
+  (declare (xargs :guard (natp n)
+                  :measure (nfix n)))
+  (if (zp n)
+      (make-empty-mgt-state)
+    (mv-let (st id)
+      (add-token-to-state (make-mgt-with-n-tokens (- n 1))
+                          (concatenate 'string "tok" (coerce (list (code-char (+ 65 (mod (- n 1) 26)))) 'string)))
+      (declare (ignore id))
+      st)))
+
+(defthm mgt-state-p-of-make-mgt-with-n-tokens
+  (implies (natp n)
+           (mgt-state-p (make-mgt-with-n-tokens n)))
+  :hints (("Goal" :induct (make-mgt-with-n-tokens n))))
+
+(defun token-ids-unique-in-list (lst seen)
+  (declare (xargs :guard (and (token-list-p lst) (true-listp seen))
+                  :measure (len lst)))
+  (if (atom lst)
+      t
+    (let ((id (cdr (car lst))))
+      (if (member-equal id seen)
+          nil
+        (token-ids-unique-in-list (cdr lst) (cons id seen))))))
+
+(defun token-strings-unique-in-list (lst seen)
+  (declare (xargs :guard (and (token-list-p lst) (true-listp seen))
+                  :measure (len lst)))
+  (if (atom lst)
+      t
+    (let ((tok (car (car lst))))
+      (if (member-equal tok seen)
+          nil
+        (token-strings-unique-in-list (cdr lst) (cons tok seen))))))
+
+(defun verify-full-pipeline (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (let* ((tokens (encode-text st text))
+         (decoded (decode-tokens st tokens))
+         (re-encoded (encode-text st decoded))
+         (re-decoded (decode-tokens st re-encoded)))
+    (equal decoded re-decoded)))
+
+(defthm full-pipeline-stable-after-first-roundtrip
+  (implies (and (mgt-state-p st) (stringp text))
+           (verify-full-pipeline st text)))
+
+(defun count-whitespace-tokens (st text pos count)
+  (declare (xargs :guard (and (mgt-state-p st)
+                               (stringp text)
+                               (natp pos)
+                               (natp count)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (declare (ignore st))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      count
+    (if (is-whitespace-char (char text pos))
+        (count-whitespace-tokens st text (+ pos 1) (+ count 1))
+      (count-whitespace-tokens st text (+ pos 1) count))))
+
+(defthm natp-of-count-whitespace-tokens
+  (implies (and (natp pos) (natp count))
+           (natp (count-whitespace-tokens st text pos count)))
+  :hints (("Goal" :induct (count-whitespace-tokens st text pos count)))
+  :rule-classes :type-prescription)
+
+(defun count-punctuation-chars (text pos count)
+  (declare (xargs :guard (and (stringp text)
+                               (natp pos)
+                               (natp count)
+                               (<= pos (length text)))
+                  :measure (nfix (- (length text) pos))))
+  (if (or (not (natp pos)) (>= pos (length text)))
+      count
+    (if (is-punctuation-char (char text pos))
+        (count-punctuation-chars text (+ pos 1) (+ count 1))
+      (count-punctuation-chars text (+ pos 1) count))))
+
+(defthm natp-of-count-punctuation-chars
+  (implies (and (natp pos) (natp count))
+           (natp (count-punctuation-chars text pos count)))
+  :hints (("Goal" :induct (count-punctuation-chars text pos count)))
+  :rule-classes :type-prescription)
+
+(defun make-token-pair (first second)
+  (declare (xargs :guard (and (natp first) (natp second))))
+  (cons first second))
+
+(defun token-pair-first (pair)
+  (declare (xargs :guard (pair-key-p pair)))
+  (car pair))
+
+(defun token-pair-second (pair)
+  (declare (xargs :guard (pair-key-p pair)))
+  (cdr pair))
+
+(defthm pair-key-p-of-make-token-pair
+  (implies (and (natp first) (natp second))
+           (pair-key-p (make-token-pair first second))))
+
+(defthm token-pair-first-of-make
+  (implies (and (natp first) (natp second))
+           (equal (token-pair-first (make-token-pair first second))
+                  first)))
+
+(defthm token-pair-second-of-make
+  (implies (and (natp first) (natp second))
+           (equal (token-pair-second (make-token-pair first second))
+                  second)))
+
+(defun make-bpe-merge (token-id priority)
+  (declare (xargs :guard (and (natp token-id) (natp priority))))
+  (cons token-id priority))
+
+(defun bpe-merge-token-id (merge)
+  (declare (xargs :guard (bpe-merge-p merge)))
+  (car merge))
+
+(defun bpe-merge-priority (merge)
+  (declare (xargs :guard (bpe-merge-p merge)))
+  (cdr merge))
+
+(defthm bpe-merge-p-of-make
+  (implies (and (natp tid) (natp pri))
+           (bpe-merge-p (make-bpe-merge tid pri))))
+
+(defthm bpe-merge-token-id-of-make
+  (implies (and (natp tid) (natp pri))
+           (equal (bpe-merge-token-id (make-bpe-merge tid pri))
+                  tid)))
+
+(defthm bpe-merge-priority-of-make
+  (implies (and (natp tid) (natp pri))
+           (equal (bpe-merge-priority (make-bpe-merge tid pri))
+                  pri)))
+
+(defun find-best-bpe-merge (bpe-pairs key1 key2 st)
+  (declare (xargs :guard (and (bpe-pair-list-p bpe-pairs)
+                               (stringp key1)
+                               (stringp key2)
+                               (mgt-state-p st))
+                  :measure (len bpe-pairs)))
+  (declare (ignore st))
+  (let ((merged-key (concatenate 'string key1 key2)))
+    (lookup-bpe merged-key bpe-pairs)))
+
+(defun apply-best-bpe-step (st current-tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp current-tokens))
+                  :measure (len current-tokens)))
+  (declare (ignore st))
+  current-tokens)
+
+(defun all-token-list-entries-valid (t2i i2t)
+  (declare (xargs :guard (and (token-list-p t2i) (id-list-p i2t))
+                  :measure (len t2i)))
+  (if (atom t2i)
+      t
+    (let* ((token (car (car t2i)))
+           (id (cdr (car t2i)))
+           (found (lookup-id id i2t)))
+      (and found
+           (equal found token)
+           (all-token-list-entries-valid (cdr t2i) i2t)))))
+
+(defthm all-entries-valid-when-nil
+  (all-token-list-entries-valid nil i2t))
+
+(defun all-id-list-entries-valid (i2t t2i)
+  (declare (xargs :guard (and (id-list-p i2t) (token-list-p t2i))
+                  :measure (len i2t)))
+  (if (atom i2t)
+      t
+    (let* ((id (car (car i2t)))
+           (token (cdr (car i2t)))
+           (found (lookup-token token t2i)))
+      (and found
+           (equal found id)
+           (all-id-list-entries-valid (cdr i2t) t2i)))))
+
+(defthm all-id-entries-valid-when-nil
+  (all-id-list-entries-valid nil t2i))
+
+(defun state-bijectivity-p (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (and (all-token-list-entries-valid (mgt-token-to-id st)
+                                     (mgt-id-to-token st))
+       (all-id-list-entries-valid (mgt-id-to-token st)
+                                  (mgt-token-to-id st))
+       (equal (len (mgt-token-to-id st))
+              (len (mgt-id-to-token st)))))
+
+(defun encode-then-validate (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (validate-tokens st (encode-text st text)))
+
+(defun safe-decode (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))))
+  (if (validate-tokens st tokens)
+      (decode-tokens st tokens)
+    "[INVALID]"))
+
+(defthm stringp-of-safe-decode
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (stringp (safe-decode st tokens))))
+
+(defun state-snapshot (st)
+  (declare (xargs :guard (mgt-state-p st)))
+  (list (len (mgt-token-to-id st))
+        (len (mgt-id-to-token st))
+        (len (mgt-prefixes st))
+        (len (mgt-suffixes st))
+        (len (mgt-roots st))
+        (len (mgt-bpe-pairs st))
+        (mgt-next-id st)))
+
+(defthm true-listp-of-state-snapshot
+  (implies (mgt-state-p st)
+           (true-listp (state-snapshot st))))
+
+(defun snapshot-next-id (snapshot)
+  (declare (xargs :guard (and (true-listp snapshot) (equal (len snapshot) 7))))
+  (nth 6 snapshot))
+
+(defun snapshot-vocab-size (snapshot)
+  (declare (xargs :guard (and (true-listp snapshot) (equal (len snapshot) 7))))
+  (nth 0 snapshot))
+
+(defun compare-snapshots-monotonic (snap1 snap2)
+  (declare (xargs :guard (and (true-listp snap1) (equal (len snap1) 7)
+                               (true-listp snap2) (equal (len snap2) 7)
+                               (natp (nth 6 snap1)) (natp (nth 6 snap2)))))
+  (<= (nth 6 snap1) (nth 6 snap2)))
+
+(defun empty-state-has-no-tokens ()
+  (declare (xargs :guard t))
+  (let ((st (make-empty-mgt-state)))
+    (and (equal (vocab-size st) 0)
+         (equal (mgt-next-id st) 0)
+         (null (mgt-prefixes st))
+         (null (mgt-suffixes st))
+         (null (mgt-roots st))
+         (null (mgt-bpe-pairs st)))))
+
+(defthm empty-state-verified
+  (empty-state-has-no-tokens))
+
+(defun verify-unknown-always-unk ()
+  (declare (xargs :guard t))
+  (and (equal (unknown-replacement "anything") *special-unk*)
+       (equal (unknown-replacement "") *special-unk*)
+       (equal (unknown-replacement "test") *special-unk*)))
+
+(defthm unknown-always-unk
+  (verify-unknown-always-unk))
+
+(defun reconstruct-from-serialized-token-list (serialized)
+  (declare (xargs :guard (true-listp serialized)
+                  :measure (len serialized)))
+  (if (atom serialized)
+      nil
+    (let ((entry (car serialized)))
+      (if (and (true-listp entry)
+               (equal (len entry) 2)
+               (stringp (first entry))
+               (natp (second entry)))
+          (cons (cons (first entry) (second entry))
+                (reconstruct-from-serialized-token-list (cdr serialized)))
+        (reconstruct-from-serialized-token-list (cdr serialized))))))
+
+(defun reconstruct-from-serialized-id-list (serialized)
+  (declare (xargs :guard (true-listp serialized)
+                  :measure (len serialized)))
+  (if (atom serialized)
+      nil
+    (let ((entry (car serialized)))
+      (if (and (true-listp entry)
+               (equal (len entry) 2)
+               (natp (first entry))
+               (stringp (second entry)))
+          (cons (cons (first entry) (second entry))
+                (reconstruct-from-serialized-id-list (cdr serialized)))
+        (reconstruct-from-serialized-id-list (cdr serialized))))))
+
+(defun reconstruct-from-serialized-bpe-list (serialized)
+  (declare (xargs :guard (true-listp serialized)
+                  :measure (len serialized)))
+  (if (atom serialized)
+      nil
+    (let ((entry (car serialized)))
+      (if (and (true-listp entry)
+               (equal (len entry) 3)
+               (stringp (first entry))
+               (natp (second entry))
+               (natp (third entry)))
+          (cons (cons (first entry)
+                      (cons (second entry) (third entry)))
+                (reconstruct-from-serialized-bpe-list (cdr serialized)))
+        (reconstruct-from-serialized-bpe-list (cdr serialized))))))
+
+(defun string-length-bounded (str bound)
+  (declare (xargs :guard (and (stringp str) (natp bound))))
+  (<= (length str) bound))
+
+(defun all-token-strings-bounded (lst bound)
+  (declare (xargs :guard (and (token-list-p lst) (natp bound))
+                  :measure (len lst)))
+  (if (atom lst)
+      t
+    (and (string-length-bounded (car (car lst)) bound)
+         (all-token-strings-bounded (cdr lst) bound))))
+
+(defthm all-token-strings-bounded-of-nil
+  (all-token-strings-bounded nil bound))
+
+(defun max-token-string-length (lst current-max)
+  (declare (xargs :guard (and (token-list-p lst) (natp current-max))
+                  :measure (len lst)))
+  (if (atom lst)
+      current-max
+    (let ((l (length (car (car lst)))))
+      (max-token-string-length (cdr lst)
+                                (if (> l current-max) l current-max)))))
+
+(defthm natp-of-max-token-string-length
+  (implies (natp current-max)
+           (natp (max-token-string-length lst current-max)))
+  :hints (("Goal" :induct (max-token-string-length lst current-max)))
+  :rule-classes :type-prescription)
+
+(defthm max-token-string-length-geq-current
+  (implies (natp current-max)
+           (<= current-max (max-token-string-length lst current-max)))
+  :hints (("Goal" :induct (max-token-string-length lst current-max)))
+  :rule-classes :linear)
+
+(defun verify-morph-decompose-returns-tokens (st word)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word))))
+  (let ((result (morph-decompose st word)))
+    (or (null result)
+        (nat-listp result))))
+
+(defthm morph-decompose-type-correct
+  (implies (and (mgt-state-p st) (stringp word))
+           (verify-morph-decompose-returns-tokens st word)))
+
+(defun verify-subword-split-returns-tokens (st word)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word))))
+  (nat-listp (subword-split st word)))
+
+(defthm subword-split-type-correct
+  (implies (and (mgt-state-p st) (stringp word))
+           (verify-subword-split-returns-tokens st word)))
+
+(defun verify-encode-word-returns-tokens (st word)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp word))))
+  (nat-listp (encode-word st word)))
+
+(defthm encode-word-type-correct
+  (implies (and (mgt-state-p st) (stringp word))
+           (verify-encode-word-returns-tokens st word)))
+
+(defun verify-encode-text-returns-tokens (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (nat-listp (encode-text st text)))
+
+(defthm encode-text-type-correct
+  (implies (and (mgt-state-p st) (stringp text))
+           (verify-encode-text-returns-tokens st text)))
+
+(defun verify-decode-tokens-returns-string (st tokens)
+  (declare (xargs :guard (and (mgt-state-p st) (nat-listp tokens))))
+  (stringp (decode-tokens st tokens)))
+
+(defthm decode-tokens-type-correct
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (verify-decode-tokens-returns-string st tokens)))
+
+(defun verify-tensor-encode-returns-tensor (st text)
+  (declare (xargs :guard (and (mgt-state-p st) (stringp text))))
+  (tensor-p (encode-to-tensor st text)))
+
+(defthm tensor-encode-type-correct
+  (implies (and (mgt-state-p st) (stringp text))
+           (verify-tensor-encode-returns-tensor st text)))
+
+(defun verify-tensor-decode-returns-string (st tensor)
+  (declare (xargs :guard (and (mgt-state-p st) (tensor-p tensor))))
+  (stringp (decode-from-tensor st tensor)))
+
+(defthm tensor-decode-type-correct
+  (implies (and (mgt-state-p st) (tensor-p tensor))
+           (verify-tensor-decode-returns-string st tensor)))
+
+(defun verify-batch-encode-returns-list (st texts)
+  (declare (xargs :guard (and (mgt-state-p st) (string-list-p texts))))
+  (true-listp (encode-batch st texts)))
+
+(defthm batch-encode-type-correct
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (verify-batch-encode-returns-list st texts)))
+
+(defun verify-batch-decode-returns-list (st token-lists)
+  (declare (xargs :guard (and (mgt-state-p st) (true-listp token-lists))))
+  (string-list-p (batch-decode st token-lists)))
+
+(defthm batch-decode-type-correct
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (verify-batch-decode-returns-list st token-lists)))

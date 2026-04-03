@@ -18,8 +18,8 @@ DATA_MOUNT_PATH = Path("/data")
 CHECKPOINT_MOUNT_PATH = Path("/checkpoints")
 PROJECT_MOUNT_PATH = Path("/jaide")
 
-DATASET_DIR = DATA_MOUNT_PATH / "tower9b"
-DATASET_FILE = DATASET_DIR / "hun_Latn_full.jsonl"
+DATASET_DIR = DATA_MOUNT_PATH / "dataset"
+DATASET_FILE = DATASET_DIR / "train.jsonl"
 
 MODELS_DIR = PROJECT_MOUNT_PATH / "models"
 BINARY_PATH = PROJECT_MOUNT_PATH / "main"
@@ -55,7 +55,7 @@ jaide_image = (
         "DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-change-held-packages git curl xz-utils build-essential wget ca-certificates",
         "rm -rf /var/lib/apt/lists/*",
     )
-    .pip_install("pyarrow", "requests", "datasets", "huggingface_hub", "zstandard")
+    .pip_install("pyarrow", "requests", "zstandard")
     .run_commands(
         "mkdir -p /opt",
         "curl -sL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar -xJ -C /opt",
@@ -65,9 +65,6 @@ jaide_image = (
     .env(
         {
             "PATH": "/opt/zig-linux-x86_64-0.13.0:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "HF_HOME": "/data/hf_home",
-            "HF_DATASETS_CACHE": "/data/hf_datasets_cache",
-            "TRANSFORMERS_CACHE": "/data/hf_transformers_cache",
         }
     )
     .add_local_dir(
@@ -87,59 +84,18 @@ def _run_checked(cmd: List[str], cwd: Optional[str] = None, env: Optional[Dict[s
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
-def _dataset_exists() -> bool:
-    try:
-        return DATASET_FILE.is_file() and DATASET_FILE.stat().st_size > 0
-    except OSError:
-        return False
-
-def download_hunsum1_to_jsonl(volume: modal.Volume) -> Tuple[str, int, int]:
-    from datasets import load_dataset
-
-    _ensure_dir(DATASET_DIR)
-
-    if _dataset_exists():
-        size = int(DATASET_FILE.stat().st_size)
-        line_count = 0
-        with open(DATASET_FILE, "r", encoding="utf-8", errors="replace") as f_in:
-            for _ in f_in:
-                line_count += 1
-        return str(DATASET_FILE), size, line_count
-
-    ds = load_dataset("SZTAKI-HLT/HunSum-1", split="train")
-
-    line_count = 0
-    with open(DATASET_FILE, "w", encoding="utf-8") as f_out:
-        for i, row in enumerate(ds):
-            text = ""
-            for key in ("text", "article", "lead", "content", "sentence"):
-                val = row.get(key) if isinstance(row, dict) else None
-                if isinstance(val, str) and val.strip():
-                    text = val.strip()
-                    break
-            if not text and isinstance(row, dict):
-                for _, val in row.items():
-                    if isinstance(val, str) and len(val) > 50:
-                        text = val.strip()
-                        break
-            if text and len(text) > 20:
-                f_out.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
-                line_count += 1
-
+def _get_dataset_info() -> Tuple[str, int, int]:
+    if not DATASET_FILE.is_file() or DATASET_FILE.stat().st_size == 0:
+        raise FileNotFoundError(
+            f"Dataset not found at {DATASET_FILE}. "
+            f"Place your training data (JSONL format) in the '{DATA_VOLUME_NAME}' volume at: {DATASET_FILE}"
+        )
     size = int(DATASET_FILE.stat().st_size)
-    volume.commit()
+    line_count = 0
+    with open(DATASET_FILE, "r", encoding="utf-8", errors="replace") as f:
+        for _ in f:
+            line_count += 1
     return str(DATASET_FILE), size, line_count
-
-def _patch_zig_sources_for_0_13(project_dir: str) -> None:
-    cmd = [
-        "bash",
-        "-lc",
-        "find src -name '*.zig' -print0 | xargs -0 -I {} sed -i "
-        "'s/@fabs/@abs/g; s/\\.Little/.little/g; s/\\.AcqRel/.acq_rel/g; s/\\.SeqCst/.seq_cst/g' {}",
-    ]
-    rc, out, err = _run_checked(cmd, cwd=project_dir)
-    if rc != 0:
-        raise RuntimeError(f"Zig patch failed: {err[:4000]}")
 
 def _build_zig(project_dir: str) -> None:
     rc, out, err = _run_checked(["zig", "build-exe", "src/main.zig", "-O", "ReleaseFast"], cwd=project_dir)
@@ -188,13 +144,12 @@ def train_jaide(
 
     gpu_count, gpu_list = _detect_gpus()
 
-    dataset_path, dataset_size, sample_count = download_hunsum1_to_jsonl(data_volume)
+    dataset_path, dataset_size, sample_count = _get_dataset_info()
 
     os.chdir(str(PROJECT_MOUNT_PATH))
     _ensure_dir(MODELS_DIR)
     _ensure_dir(CHECKPOINT_MOUNT_PATH)
 
-    _patch_zig_sources_for_0_13(str(PROJECT_MOUNT_PATH))
     _build_zig(str(PROJECT_MOUNT_PATH))
 
     num_epochs = int(epochs)
@@ -211,18 +166,12 @@ def train_jaide(
 
         cmd = [
             str(BINARY_PATH),
-            "--mode",
-            "train",
-            "--epochs",
-            "1",
-            "--batch-size",
-            str(bs),
-            "--dataset-path",
-            str(dataset_path),
-            "--samples",
-            str(sample_count),
-            "--output-dir",
-            str(MODELS_DIR),
+            "--mode", "train",
+            "--epochs", "1",
+            "--batch-size", str(bs),
+            "--dataset-path", str(dataset_path),
+            "--samples", str(sample_count),
+            "--output-dir", str(MODELS_DIR),
         ]
 
         proc = subprocess.run(

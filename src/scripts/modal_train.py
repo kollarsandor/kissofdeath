@@ -27,18 +27,13 @@ image = (
         "xz-utils",
     )
     .run_commands(
-        "curl -sSf https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz -o /tmp/zig.tar.xz",
+        "curl -sSf https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o /tmp/zig.tar.xz",
         "tar -xf /tmp/zig.tar.xz -C /tmp",
-        "mv /tmp/zig-linux-x86_64-0.11.0 /usr/local/zig",
+        "mv /tmp/zig-linux-x86_64-0.13.0 /usr/local/zig",
         "ln -s /usr/local/zig/zig /usr/local/bin/zig",
         "zig version",
     )
     .add_local_dir("src", remote_path="/jaide_src", copy=True)
-    .add_local_file(
-        "arxiv_hungarian_dataset_2.jsonl",
-        remote_path="/dataset/arxiv_hungarian_dataset_2.jsonl",
-        copy=True,
-    )
     .run_commands(
         "zig build-exe /jaide_src/main.zig -O ReleaseFast -fstrip -femit-bin=/root/main",
         "chmod +x /root/main",
@@ -47,7 +42,7 @@ image = (
 
 WORK_DIR = Path("/workspace")
 SRC_MOUNT = Path("/jaide_src")
-DATASET_PATH = Path("/dataset/arxiv_hungarian_dataset_2.jsonl")
+DATASET_PATH = Path("/dataset/train.jsonl")
 MODELS_DIR = Path("/models")
 BINARY_PATH = Path("/root/main")
 
@@ -149,35 +144,27 @@ def train_jaide_rsf(
             raise FileNotFoundError(f"Compiled binary not found at: {BINARY_PATH}")
 
         if not DATASET_PATH.is_file():
-            raise FileNotFoundError(f"Dataset not found at: {DATASET_PATH}")
+            raise FileNotFoundError(
+                f"Dataset not found at: {DATASET_PATH}. "
+                f"Place your training data (JSONL format) in the 'jaide-training-data' volume at: {DATASET_PATH}"
+            )
 
         unique_id = uuid.uuid4().hex
         model_output = MODELS_DIR / f"rsf_trained_{GPU_COUNT}x_{unique_id}.bin"
 
         train_args = [
             str(BINARY_PATH),
-            "--mode",
-            "train",
-            "--dataset",
-            str(DATASET_PATH),
-            "--epochs",
-            str(epochs),
-            "--batch-size",
-            str(batch_size),
-            "--learning-rate",
-            str(learning_rate),
-            "--dim",
-            str(dim),
-            "--layers",
-            str(layers),
-            "--sample-limit",
-            str(sample_limit),
-            "--noise-level",
-            str(noise_level),
-            "--gradient-clip",
-            str(gradient_clip),
-            "--model-output",
-            str(model_output),
+            "--mode", "train",
+            "--dataset", str(DATASET_PATH),
+            "--epochs", str(epochs),
+            "--batch-size", str(batch_size),
+            "--learning-rate", str(learning_rate),
+            "--dim", str(dim),
+            "--layers", str(layers),
+            "--sample-limit", str(sample_limit),
+            "--noise-level", str(noise_level),
+            "--gradient-clip", str(gradient_clip),
+            "--model-output", str(model_output),
         ]
 
         env = os.environ.copy()
@@ -324,17 +311,17 @@ def main(
 ):
     separator = "=" * 70
     print(separator)
-    print("JAIDE v40 - Root-Level AGI Training on 8x GPUs")
+    print("JAIDE v40 - RSF Training")
     print(separator)
     print("Configuration:")
-    print(f"  Epochs: {epochs}")
-    print(f"  Batch Size: {batch_size}")
-    print(f"  Learning Rate: {learning_rate}")
-    print(f"  Embedding Dimension: {dim}")
-    print(f"  RSF Layers: {layers}")
-    print(f"  Sample Limit: {sample_limit}")
-    print(f"  Noise Level: {noise_level}")
-    print(f"  Gradient Clip: {gradient_clip}")
+    print(f"  Epochs:            {epochs}")
+    print(f"  Batch Size:        {batch_size}")
+    print(f"  Learning Rate:     {learning_rate}")
+    print(f"  Embedding Dim:     {dim}")
+    print(f"  RSF Layers:        {layers}")
+    print(f"  Sample Limit:      {sample_limit}")
+    print(f"  Noise Level:       {noise_level}")
+    print(f"  Gradient Clip:     {gradient_clip}")
     print(separator)
 
     result = train_jaide_rsf.remote(
@@ -355,8 +342,7 @@ def main(
     duration_seconds = result.get("duration_seconds")
     if duration_seconds is not None:
         ds = float(duration_seconds)
-        print(f"Duration: {ds:.2f} seconds ({ds/60.0:.2f} minutes)")
-
+        print(f"Duration: {ds:.2f}s ({ds/60.0:.2f} min)")
     print(f"GPU Configuration: {result.get('gpu_config')}")
 
     model_path = result.get("model_path")
