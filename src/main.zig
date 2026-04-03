@@ -283,7 +283,7 @@ const Config = struct {
 };
 
 const TrainingSample = struct {
-    text: []u8,
+    text: []const u8,
     tokens: []u32,
 
     pub fn deinit(self: *TrainingSample, allocator: std.mem.Allocator) void {
@@ -639,24 +639,53 @@ fn initTokenizer(allocator: std.mem.Allocator) !MGT {
     const sample_vocab = [_][]const u8{
         "a", "az", "es", "is", "nem", "de", "hogy", "egy", "mert", "vagy",
         "minden", "csak", "meg", "mar", "most", "itt", "ott", "ki", "mi", "ez",
+        "volt", "van", "lesz", "lett", "lehet", "kell", "tud", "akar", "fog", "szeret",
+        "nagy", "kis", "jo", "rossz", "uj", "regi", "szep", "sok", "keves", "mas",
+        "ember", "elet", "vilag", "munka", "ido", "hely", "nap", "ev", "het", "honap",
+        "szam", "szo", "mondat", "szoveg", "nyelv", "konyv", "oldal", "resz", "forma", "mod",
+        "magyar", "magyar", "europai", "nemzetkozi", "hazai", "kulfoldi", "helyi", "altalanos",
+        "azt", "ezt", "abban", "ebben", "azzal", "ezzel", "arra", "erre", "arrol", "errol",
+        "aki", "ami", "amely", "amelyek", "akik", "amik", "ahogy", "ahol", "ahova", "ahonnan",
+        "mikor", "hogyan", "miert", "hol", "hova", "honnan", "mennyi", "milyen", "melyik",
+        "utca", "varos", "orszag", "haz", "iskola", "egyetem", "korhaz", "bolt", "park", "hid",
+        "Budapest", "Magyarorszag", "Debrecen", "Szeged", "Pecs", "Miskolc", "Gyor",
+        "kormany", "miniszter", "elnok", "parlament", "torveny", "rendszer", "allam", "part",
+        "gazdasag", "piac", "penz", "bank", "ado", "koltseg", "bevetel", "profit", "vallalat",
+        "kultura", "muveszet", "zene", "film", "irodalom", "szinhaz", "sport", "jatek",
+        "csalad", "gyerek", "szulo", "anya", "apa", "teszt", "fiu", "lany", "ferfi", "no",
+        "egeszseg", "betegseg", "orvos", "gyogyszer", "kezel", "vizsgalat", "mutet", "tunet",
+        "oktatas", "tanit", "tanul", "diak", "tanar", "lecke", "vizsga", "eredmeny",
+        "technika", "rendszer", "program", "szamitogep", "internet", "halozat", "adat",
+        "tudomany", "kutatas", "fejleszt", "eredmeny", "modszer", "elmelet", "kiserletek",
+        "energia", "viz", "fold", "levego", "tuz", "feny", "hang", "homerseklet", "nyomas",
+        "szin", "feher", "fekete", "piros", "kek", "zold", "sarga", "barna", "szurke",
+        "elso", "masodik", "harmadik", "utolso", "kovetkezo", "elozo", "felso", "also",
+        "kap", "ad", "lát", "hall", "mond", "ker", "valaszol", "ir", "olvas", "beszel",
+        "megy", "jon", "all", "ul", "fut", "jar", "visz", "hoz", "tesz", "vesz",
+        "gondol", "ert", "hisz", "remeny", "felel", "var", "kepes", "probal", "kezd", "vegez",
+        "mutat", "jelent", "kepvisel", "tartalmaz", "vonatkozik", "ervenyesul", "megjelenik",
+        "fejlodes", "valtozas", "novekedes", "csokkenes", "javulas", "romlás", "emelkedes",
+        "lehetoseg", "problema", "megoldas", "kerdes", "valasz", "celkituzes", "feladat",
+        "fontos", "szukseges", "lehetseges", "biztos", "vilagos", "nyilvanvalo", "jellemzo",
+        "szerint", "miatt", "ellenere", "helyett", "altal", "felol", "kozott", "elott", "utan",
+        "valamint", "ugyanis", "tehat", "viszont", "azonban", "tovabba", "egyebkent", "persze",
+        "tobb", "kevesebb", "nagyobb", "kisebb", "jobb", "rosszabb", "erosebb", "gyengebb",
+        "igen", "nem", "talán", "biztosan", "valoszinuleg", "termeszetesen", "sajnos",
         "neural", "network", "learning", "deep", "machine", "intelligence", "artificial",
         "data", "model", "training", "optimization", "algorithm", "computer", "science",
-        "mesterseges", "intelligencia", "neuralis", "halozat", "tanulas", "gepi",
+        "mesterseges", "intelligencia", "neuralis", "tanulas", "gepi",
         "adattudomany", "optimalizalas", "algoritmus", "kvantum", "robotika",
         "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog",
         "weights", "bias", "matrix", "vector", "scalar", "tensor", "gradient", "descent",
         "forward", "backward", "epoch", "batch", "loss", "accuracy", "precision", "recall",
-        "f1", "score", "roc", "auc", "confusion", "matrix", "classification", "regression",
-        "clustering", "anomaly", "detection", "reinforcement", "policy", "value", "actor",
-        "critic", "agent", "environment", "reward", "state", "action", "transition",
-        "probability", "distribution", "normal", "gaussian", "uniform", "poisson", "binomial",
-        "sampling", "monte", "carlo", "markov", "chain", "decision", "process", "bellman",
-        "equation", "dynamic", "programming", "optimal", "control", "theory", "graph",
-        "node", "edge", "vertex", "path", "cycle", "tree", "forest", "directed", "undirected",
-        "weighted", "bipartite", "connected", "component", "spanning", "shortest", "longest",
+        "classification", "regression", "clustering", "detection", "reinforcement",
+        "probability", "distribution", "sampling", "equation", "theory", "graph",
+        "node", "edge", "path", "tree", "component",
     };
 
-    const sample_anchors = [_][]const u8{ "a", "az", "es", "the", "neural", "mesterseges" };
+    const sample_anchors = [_][]const u8{
+        "a", "az", "es", "the", "neural", "mesterseges", "hogy", "nem", "van", "volt",
+    };
 
     return try MGT.init(allocator, &sample_vocab, &sample_anchors);
 }
@@ -1175,6 +1204,33 @@ fn generateSyntheticSamples(allocator: std.mem.Allocator, mgt: *MGT, count: usiz
     return samples.toOwnedSlice();
 }
 
+fn extractJsonTextField(allocator: std.mem.Allocator, line: []const u8) ?[]const u8 {
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        allocator,
+        line,
+        .{ .allocate = .alloc_always },
+    ) catch return null;
+    defer parsed.deinit();
+
+    return switch (parsed.value) {
+        .object => |obj| blk: {
+            inline for (.{ "text", "content", "sentence", "article" }) |key| {
+                if (obj.get(key)) |val| {
+                    switch (val) {
+                        .string => |s| if (s.len > 0) {
+                            break :blk allocator.dupe(u8, s) catch null;
+                        },
+                        else => {},
+                    }
+                }
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
 fn loadDatasetSamples(allocator: std.mem.Allocator, mgt: *MGT, dataset_path: []const u8, limit: usize) ![]TrainingSample {
     var samples = std.ArrayList(TrainingSample).init(allocator);
     errdefer {
@@ -1214,34 +1270,39 @@ fn loadDatasetSamples(allocator: std.mem.Allocator, mgt: *MGT, dataset_path: []c
         const clean_line = std.mem.trim(u8, line.?, " \t\r\n");
         if (clean_line.len == 0) continue;
 
-        const text_copy = allocator.dupe(u8, clean_line) catch continue;
-        errdefer allocator.free(text_copy);
+        const text_content = extractJsonTextField(allocator, clean_line) orelse continue;
+        errdefer allocator.free(text_content);
+
+        if (text_content.len < 10) {
+            allocator.free(text_content);
+            continue;
+        }
 
         var tokens_list = std.ArrayList(u32).init(allocator);
 
-        mgt.encode(clean_line, &tokens_list) catch {
-            allocator.free(text_copy);
+        mgt.encode(text_content, &tokens_list) catch {
+            allocator.free(text_content);
             tokens_list.deinit();
             continue;
         };
 
         if (tokens_list.items.len == 0) {
-            allocator.free(text_copy);
+            allocator.free(text_content);
             tokens_list.deinit();
             continue;
         }
 
         const tokens = tokens_list.toOwnedSlice() catch {
-            allocator.free(text_copy);
+            allocator.free(text_content);
             tokens_list.deinit();
             continue;
         };
 
         samples.append(.{
-            .text = text_copy,
+            .text = text_content,
             .tokens = tokens,
         }) catch {
-            allocator.free(text_copy);
+            allocator.free(text_content);
             allocator.free(tokens);
             continue;
         };

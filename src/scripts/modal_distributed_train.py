@@ -55,7 +55,7 @@ jaide_image = (
         "DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-change-held-packages git curl xz-utils build-essential wget ca-certificates",
         "rm -rf /var/lib/apt/lists/*",
     )
-    .pip_install("pyarrow", "requests", "zstandard")
+    .pip_install("pyarrow", "requests", "zstandard", "datasets", "huggingface_hub")
     .run_commands(
         "mkdir -p /opt",
         "curl -sL https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz | tar -xJ -C /opt",
@@ -65,6 +65,8 @@ jaide_image = (
     .env(
         {
             "PATH": "/opt/zig-linux-x86_64-0.13.0:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HF_HOME": "/data/hf_home",
+            "HF_DATASETS_CACHE": "/data/hf_datasets_cache",
         }
     )
     .add_local_dir(
@@ -84,17 +86,41 @@ def _run_checked(cmd: List[str], cwd: Optional[str] = None, env: Optional[Dict[s
 def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
-def _get_dataset_info() -> Tuple[str, int, int]:
-    if not DATASET_FILE.is_file() or DATASET_FILE.stat().st_size == 0:
-        raise FileNotFoundError(
-            f"Dataset not found at {DATASET_FILE}. "
-            f"Place your training data (JSONL format) in the '{DATA_VOLUME_NAME}' volume at: {DATASET_FILE}"
-        )
-    size = int(DATASET_FILE.stat().st_size)
+def download_finephrase_to_jsonl(volume: modal.Volume) -> Tuple[str, int, int]:
+    from datasets import load_dataset
+
+    _ensure_dir(DATASET_DIR)
+
+    if DATASET_FILE.is_file() and DATASET_FILE.stat().st_size > 0:
+        size = int(DATASET_FILE.stat().st_size)
+        line_count = 0
+        with open(DATASET_FILE, "r", encoding="utf-8", errors="replace") as f:
+            for _ in f:
+                line_count += 1
+        return str(DATASET_FILE), size, line_count
+
+    ds = load_dataset("HuggingFaceFW/finephrase", split="train")
+
     line_count = 0
-    with open(DATASET_FILE, "r", encoding="utf-8", errors="replace") as f:
-        for _ in f:
-            line_count += 1
+    with open(DATASET_FILE, "w", encoding="utf-8") as f_out:
+        for row in ds:
+            text = ""
+            for key in ("text", "content", "sentence", "article"):
+                val = row.get(key) if isinstance(row, dict) else None
+                if isinstance(val, str) and val.strip():
+                    text = val.strip()
+                    break
+            if not text and isinstance(row, dict):
+                for _, val in row.items():
+                    if isinstance(val, str) and len(val) > 50:
+                        text = val.strip()
+                        break
+            if text and len(text) > 20:
+                f_out.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
+                line_count += 1
+
+    size = int(DATASET_FILE.stat().st_size)
+    volume.commit()
     return str(DATASET_FILE), size, line_count
 
 def _build_zig(project_dir: str) -> None:
@@ -144,7 +170,7 @@ def train_jaide(
 
     gpu_count, gpu_list = _detect_gpus()
 
-    dataset_path, dataset_size, sample_count = _get_dataset_info()
+    dataset_path, dataset_size, sample_count = download_finephrase_to_jsonl(data_volume)
 
     os.chdir(str(PROJECT_MOUNT_PATH))
     _ensure_dir(MODELS_DIR)

@@ -26,6 +26,7 @@ image = (
         "ca-certificates",
         "xz-utils",
     )
+    .pip_install("datasets", "huggingface_hub")
     .run_commands(
         "curl -sSf https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o /tmp/zig.tar.xz",
         "tar -xf /tmp/zig.tar.xz -C /tmp",
@@ -81,6 +82,28 @@ class ModelInfo(TypedDict):
 class ListModelsResult(TypedDict):
     models: List[ModelInfo]
     training_logs: List[TrainingResult]
+
+def _download_finephrase_to_jsonl() -> None:
+    from datasets import load_dataset
+
+    DATASET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ds = load_dataset("HuggingFaceFW/finephrase", split="train")
+    with open(DATASET_PATH, "w", encoding="utf-8") as f_out:
+        for row in ds:
+            text = ""
+            for key in ("text", "content", "sentence", "article"):
+                val = row.get(key) if isinstance(row, dict) else None
+                if isinstance(val, str) and val.strip():
+                    text = val.strip()
+                    break
+            if not text and isinstance(row, dict):
+                for _, val in row.items():
+                    if isinstance(val, str) and len(val) > 50:
+                        text = val.strip()
+                        break
+            if text and len(text) > 20:
+                f_out.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
+    logger.info(f"Finephrase dataset saved to {DATASET_PATH}")
 
 def _ensure_positive(name: str, value: Union[int, float]) -> float:
     val = float(value)
@@ -144,6 +167,10 @@ def train_jaide_rsf(
             raise FileNotFoundError(f"Compiled binary not found at: {BINARY_PATH}")
 
         if not DATASET_PATH.is_file():
+            logger.info("Dataset not found locally, downloading HuggingFaceFW/finephrase...")
+            _download_finephrase_to_jsonl()
+
+        if not DATASET_PATH.is_file():
             raise FileNotFoundError(
                 f"Dataset not found at: {DATASET_PATH}. "
                 f"Place your training data (JSONL format) in the 'jaide-training-data' volume at: {DATASET_PATH}"
@@ -155,7 +182,7 @@ def train_jaide_rsf(
         train_args = [
             str(BINARY_PATH),
             "--mode", "train",
-            "--dataset", str(DATASET_PATH),
+            "--dataset-path", str(DATASET_PATH),
             "--epochs", str(epochs),
             "--batch-size", str(batch_size),
             "--learning-rate", str(learning_rate),
