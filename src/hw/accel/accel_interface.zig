@@ -4,7 +4,9 @@ const core_tensor = @import("../../core/tensor.zig");
 
 pub const AccelError = error{
     FutharkInitFailed,
+    FutharkSyncFailed,
     FutharkForwardFailed,
+    FutharkGradFailed,
     FutharkTrainingStepFailed,
     NullPointer,
     InvalidDimensions,
@@ -34,7 +36,7 @@ pub const FutharkContext = struct {
     }
 
     pub fn sync(self: *Self) AccelError!void {
-        if (futhark.futhark_context_sync(self.ctx) != 0) return AccelError.FutharkInitFailed;
+        if (futhark.futhark_context_sync(self.ctx) != 0) return AccelError.FutharkSyncFailed;
     }
 };
 
@@ -76,6 +78,34 @@ pub const FutharkArray2DF16 = struct {
 
     pub fn free(self: *Self, ctx: *FutharkContext) void {
         if (self.arr) |arr| _ = futhark.futhark_free_f16_2d(ctx.ctx, arr);
+        self.arr = null;
+    }
+};
+
+pub const FutharkArray3DF16 = struct {
+    arr: ?*futhark.struct_futhark_f16_3d,
+    dim0: usize,
+    dim1: usize,
+    dim2: usize,
+
+    const Self = @This();
+
+    pub fn newZeros(ctx: *FutharkContext, dim0: usize, dim1: usize, dim2: usize) AccelError!Self {
+        const total = dim0 * dim1 * dim2;
+        const zeros = std.heap.page_allocator.alloc(u16, total) catch return AccelError.AllocationFailed;
+        defer std.heap.page_allocator.free(zeros);
+        @memset(zeros, 0);
+        const arr = futhark.futhark_new_f16_3d(ctx.ctx, zeros.ptr, @intCast(dim0), @intCast(dim1), @intCast(dim2)) orelse return AccelError.NullPointer;
+        return Self{ .arr = arr, .dim0 = dim0, .dim1 = dim1, .dim2 = dim2 };
+    }
+
+    pub fn fromSlice(ctx: *FutharkContext, data: []const u16, dim0: usize, dim1: usize, dim2: usize) AccelError!Self {
+        const arr = futhark.futhark_new_f16_3d(ctx.ctx, data.ptr, @intCast(dim0), @intCast(dim1), @intCast(dim2)) orelse return AccelError.NullPointer;
+        return Self{ .arr = arr, .dim0 = dim0, .dim1 = dim1, .dim2 = dim2 };
+    }
+
+    pub fn free(self: *Self, ctx: *FutharkContext) void {
+        if (self.arr) |arr| _ = futhark.futhark_free_f16_3d(ctx.ctx, arr);
         self.arr = null;
     }
 };
@@ -164,12 +194,13 @@ pub const RSFAccelerator = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.weights_s.free(&self.ctx);
-        self.weights_t.free(&self.ctx);
-        self.s_bias.free(&self.ctx);
-        self.t_bias.free(&self.ctx);
-        self.velocity_s.free(&self.ctx);
+        if (!self.initialized) return;
         self.velocity_t.free(&self.ctx);
+        self.velocity_s.free(&self.ctx);
+        self.t_bias.free(&self.ctx);
+        self.s_bias.free(&self.ctx);
+        self.weights_t.free(&self.ctx);
+        self.weights_s.free(&self.ctx);
         self.ctx.deinit();
         self.initialized = false;
     }
@@ -209,8 +240,8 @@ pub const RSFAccelerator = struct {
 
     pub fn trainingStep(
         self: *Self,
-        inputs: *FutharkArray2DF16,
-        targets: *FutharkArray2DF16,
+        inputs: *FutharkArray3DF16,
+        targets: *FutharkArray3DF16,
         learning_rate: f16,
         momentum: f16,
     ) AccelError!f16 {
@@ -285,6 +316,52 @@ pub const RSFAccelerator = struct {
         const loss_f16: f16 = @bitCast(loss);
         return loss_f16;
     }
+
+    pub fn grad(
+        self: *Self,
+        y_out: *FutharkArray2DF16,
+        dy: *FutharkArray2DF16,
+    ) AccelError!struct { grad_s: FutharkArray2DF16, grad_t: FutharkArray2DF16, grad_bs: FutharkArray1DF16, grad_bt: FutharkArray1DF16 } {
+        if (!self.initialized) return AccelError.NullPointer;
+        if (self.ctx.ctx == null) return AccelError.NullPointer;
+        if (y_out.arr == null or dy.arr == null) return AccelError.NullPointer;
+        if (self.weights_s.arr == null or self.weights_t.arr == null) return AccelError.NullPointer;
+        if (self.s_bias.arr == null or self.t_bias.arr == null) return AccelError.NullPointer;
+
+        const half = self.model_dim / 2;
+        var out_grad_s: ?*futhark.struct_futhark_f16_2d = null;
+        var out_grad_t: ?*futhark.struct_futhark_f16_2d = null;
+        var out_grad_bs: ?*futhark.struct_futhark_f16_1d = null;
+        var out_grad_bt: ?*futhark.struct_futhark_f16_1d = null;
+        const clip_min_bits: u16 = @bitCast(self.clip_min);
+        const clip_max_bits: u16 = @bitCast(self.clip_max);
+
+        const result = futhark.futhark_entry_rsf_grad(
+            self.ctx.ctx,
+            &out_grad_s,
+            &out_grad_t,
+            &out_grad_bs,
+            &out_grad_bt,
+            y_out.arr,
+            dy.arr,
+            self.weights_s.arr,
+            self.weights_t.arr,
+            self.s_bias.arr,
+            self.t_bias.arr,
+            clip_min_bits,
+            clip_max_bits,
+        );
+
+        if (result != 0) return AccelError.FutharkGradFailed;
+        if (out_grad_s == null or out_grad_t == null or out_grad_bs == null or out_grad_bt == null) return AccelError.NullPointer;
+
+        return .{
+            .grad_s = FutharkArray2DF16{ .arr = out_grad_s, .rows = half, .cols = half },
+            .grad_t = FutharkArray2DF16{ .arr = out_grad_t, .rows = half, .cols = half },
+            .grad_bs = FutharkArray1DF16{ .arr = out_grad_bs, .len = half },
+            .grad_bt = FutharkArray1DF16{ .arr = out_grad_bt, .len = half },
+        };
+    }
 };
 
 pub const GPUOps = struct {
@@ -301,67 +378,24 @@ pub const GPUOps = struct {
         self.ctx.deinit();
     }
 
-    pub fn softmax(self: *Self, input: *const core_tensor.Tensor, allocator: std.mem.Allocator) AccelError!core_tensor.Tensor {
-        var fi = try FutharkArray1DF32.fromTensor(&self.ctx, input);
-        defer fi.free(&self.ctx);
-
-        var out_arr: ?*futhark.struct_futhark_f32_1d = null;
-        if (futhark.futhark_entry_apply_softmax(self.ctx.ctx, &out_arr, fi.arr) != 0) {
+    pub fn matmul(self: *Self, a: *const core_tensor.Tensor, b: *const core_tensor.Tensor, allocator: std.mem.Allocator) AccelError!core_tensor.Tensor {
+        const rows_a = a.shape.dims[0];
+        const cols_a = a.shape.dims[1];
+        const cols_b = b.shape.dims[1];
+        const fa = futhark.futhark_new_f32_2d(self.ctx.ctx, a.data.ptr, @intCast(rows_a), @intCast(cols_a)) orelse return AccelError.NullPointer;
+        defer _ = futhark.futhark_free_f32_2d(self.ctx.ctx, fa);
+        const fb = futhark.futhark_new_f32_2d(self.ctx.ctx, b.data.ptr, @intCast(cols_a), @intCast(cols_b)) orelse return AccelError.NullPointer;
+        defer _ = futhark.futhark_free_f32_2d(self.ctx.ctx, fb);
+        var out_arr: ?*futhark.struct_futhark_f32_2d = null;
+        if (futhark.futhark_entry_matmul(self.ctx.ctx, &out_arr, fa, fb) != 0) return AccelError.FutharkForwardFailed;
+        if (out_arr == null) return AccelError.NullPointer;
+        defer _ = futhark.futhark_free_f32_2d(self.ctx.ctx, out_arr);
+        const out_len = rows_a * cols_b;
+        const data = allocator.alloc(f32, out_len) catch return AccelError.AllocationFailed;
+        if (futhark.futhark_values_f32_2d(self.ctx.ctx, out_arr, data.ptr) != 0) {
+            allocator.free(data);
             return AccelError.FutharkForwardFailed;
         }
-        if (out_arr == null) return AccelError.NullPointer;
-
-        var result = FutharkArray1DF32{ .arr = out_arr, .len = input.shape.dims[0] };
-        defer result.free(&self.ctx);
-        return result.toTensor(&self.ctx, allocator);
-    }
-
-    pub fn layerNorm(self: *Self, input: *const core_tensor.Tensor, gamma: *const core_tensor.Tensor, beta: *const core_tensor.Tensor, eps: f32, allocator: std.mem.Allocator) AccelError!core_tensor.Tensor {
-        var fi = try FutharkArray1DF32.fromTensor(&self.ctx, input);
-        defer fi.free(&self.ctx);
-        var fg = try FutharkArray1DF32.fromTensor(&self.ctx, gamma);
-        defer fg.free(&self.ctx);
-        var fb = try FutharkArray1DF32.fromTensor(&self.ctx, beta);
-        defer fb.free(&self.ctx);
-
-        var out_arr: ?*futhark.struct_futhark_f32_1d = null;
-        if (futhark.futhark_entry_apply_layer_norm(self.ctx.ctx, &out_arr, fi.arr, fg.arr, fb.arr, eps) != 0) {
-            return AccelError.FutharkForwardFailed;
-        }
-        if (out_arr == null) return AccelError.NullPointer;
-
-        var result = FutharkArray1DF32{ .arr = out_arr, .len = input.shape.dims[0] };
-        defer result.free(&self.ctx);
-        return result.toTensor(&self.ctx, allocator);
-    }
-
-    pub fn relu(self: *Self, input: *const core_tensor.Tensor, allocator: std.mem.Allocator) AccelError!core_tensor.Tensor {
-        var fi = try FutharkArray1DF32.fromTensor(&self.ctx, input);
-        defer fi.free(&self.ctx);
-
-        var out_arr: ?*futhark.struct_futhark_f32_1d = null;
-        if (futhark.futhark_entry_apply_relu(self.ctx.ctx, &out_arr, fi.arr) != 0) {
-            return AccelError.FutharkForwardFailed;
-        }
-        if (out_arr == null) return AccelError.NullPointer;
-
-        var result = FutharkArray1DF32{ .arr = out_arr, .len = input.shape.dims[0] };
-        defer result.free(&self.ctx);
-        return result.toTensor(&self.ctx, allocator);
-    }
-
-    pub fn gelu(self: *Self, input: *const core_tensor.Tensor, allocator: std.mem.Allocator) AccelError!core_tensor.Tensor {
-        var fi = try FutharkArray1DF32.fromTensor(&self.ctx, input);
-        defer fi.free(&self.ctx);
-
-        var out_arr: ?*futhark.struct_futhark_f32_1d = null;
-        if (futhark.futhark_entry_apply_gelu(self.ctx.ctx, &out_arr, fi.arr) != 0) {
-            return AccelError.FutharkForwardFailed;
-        }
-        if (out_arr == null) return AccelError.NullPointer;
-
-        var result = FutharkArray1DF32{ .arr = out_arr, .len = input.shape.dims[0] };
-        defer result.free(&self.ctx);
-        return result.toTensor(&self.ctx, allocator);
+        return core_tensor.Tensor{ .data = data, .shape = .{ .dims = &[_]usize{ rows_a, cols_b } } };
     }
 };
