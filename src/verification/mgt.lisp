@@ -4206,3 +4206,1550 @@
 (defthm batch-decode-type-correct
   (implies (and (mgt-state-p st) (true-listp token-lists))
            (verify-batch-decode-returns-list st token-lists)))
+
+
+(defthm mgt-state-p-implies-true-listp-1
+  (implies (mgt-state-p st)
+           (true-listp st)))
+
+(defthm mgt-state-p-implies-len-7-1
+  (implies (mgt-state-p st)
+           (equal (len st) 7)))
+
+(defthm token-list-p-forward-to-true-listp-1
+  (implies (token-list-p x)
+           (true-listp x))
+  :rule-classes :forward-chaining)
+
+(defthm id-list-p-forward-to-true-listp-1
+  (implies (id-list-p x)
+           (true-listp x))
+  :rule-classes :forward-chaining)
+
+(defthm bpe-pair-list-p-forward-to-true-listp-1
+  (implies (bpe-pair-list-p x)
+           (true-listp x))
+  :rule-classes :forward-chaining)
+
+(defthm anchor-list-p-forward-to-true-listp-1
+  (implies (anchor-list-p x)
+           (true-listp x))
+  :rule-classes :forward-chaining)
+
+(defthm nat-listp-forward-to-true-listp-1
+  (implies (nat-listp x)
+           (true-listp x))
+  :rule-classes :forward-chaining)
+
+(defthm string-list-p-forward-to-true-listp-1
+  (implies (string-list-p x)
+           (true-listp x))
+  :rule-classes :forward-chaining)
+
+(defthm token-entry-p-forward-1
+  (implies (token-entry-p x)
+           (and (consp x)
+                (stringp (car x))
+                (natp (cdr x))))
+  :rule-classes :forward-chaining)
+
+(defthm id-entry-p-forward-1
+  (implies (id-entry-p x)
+           (and (consp x)
+                (natp (car x))
+                (stringp (cdr x))))
+  :rule-classes :forward-chaining)
+
+(defthm bpe-merge-p-forward-1
+  (implies (bpe-merge-p x)
+           (and (consp x)
+                (natp (car x))
+                (natp (cdr x))))
+  :rule-classes :forward-chaining)
+
+(defthm bpe-pair-entry-p-forward-1
+  (implies (bpe-pair-entry-p x)
+           (and (consp x)
+                (stringp (car x))
+                (bpe-merge-p (cdr x))))
+  :rule-classes :forward-chaining)
+
+(defthm anchor-entry-p-forward-1
+  (implies (anchor-entry-p x)
+           (and (consp x)
+                (stringp (car x))
+                (natp (cdr x))))
+  :rule-classes :forward-chaining)
+
+(defthm token-list-p-of-cdr-1
+  (implies (and (token-list-p x) (consp x))
+           (token-list-p (cdr x))))
+
+(defthm id-list-p-of-cdr-1
+  (implies (and (id-list-p x) (consp x))
+           (id-list-p (cdr x))))
+
+(defthm bpe-pair-list-p-of-cdr-1
+  (implies (and (bpe-pair-list-p x) (consp x))
+           (bpe-pair-list-p (cdr x))))
+
+(defthm anchor-list-p-of-cdr-1
+  (implies (and (anchor-list-p x) (consp x))
+           (anchor-list-p (cdr x))))
+
+(defthm nat-listp-of-cdr-1
+  (implies (and (nat-listp x) (consp x))
+           (nat-listp (cdr x))))
+
+(defthm string-list-p-of-cdr-1
+  (implies (and (string-list-p x) (consp x))
+           (string-list-p (cdr x))))
+
+(defthm token-entry-p-of-car-1
+  (implies (and (token-list-p x) (consp x))
+           (token-entry-p (car x))))
+
+(defthm id-entry-p-of-car-1
+  (implies (and (id-list-p x) (consp x))
+           (id-entry-p (car x))))
+
+(defthm bpe-pair-entry-p-of-car-1
+  (implies (and (bpe-pair-list-p x) (consp x))
+           (bpe-pair-entry-p (car x))))
+
+(defthm anchor-entry-p-of-car-1
+  (implies (and (anchor-list-p x) (consp x))
+           (anchor-entry-p (car x))))
+
+(defthm natp-of-car-when-nat-listp-1
+  (implies (and (nat-listp x) (consp x))
+           (natp (car x))))
+
+(defthm stringp-of-car-when-string-list-p-1
+  (implies (and (string-list-p x) (consp x))
+           (stringp (car x))))
+
+(defthm lookup-token-of-mgt-token-to-id-type-1
+  (implies (mgt-state-p st)
+           (or (null (lookup-token tok (mgt-token-to-id st)))
+               (natp (lookup-token tok (mgt-token-to-id st)))))
+  :rule-classes :type-prescription)
+
+(defthm lookup-id-of-mgt-id-to-token-type-1
+  (implies (mgt-state-p st)
+           (or (null (lookup-id id (mgt-id-to-token st)))
+               (stringp (lookup-id id (mgt-id-to-token st)))))
+  :rule-classes :type-prescription)
+
+(defthm lookup-bpe-of-mgt-bpe-pairs-type-1
+  (implies (mgt-state-p st)
+           (or (null (lookup-bpe key (mgt-bpe-pairs st)))
+               (bpe-merge-p (lookup-bpe key (mgt-bpe-pairs st)))))
+  :rule-classes :type-prescription)
+
+(defthm vocab-size-equals-token-map-len-1
+  (implies (mgt-state-p st)
+           (equal (vocab-size st)
+                  (len (mgt-token-to-id st)))))
+
+(defthm count-vocab-entries-equals-token-map-len-1
+  (implies (mgt-state-p st)
+           (equal (count-vocab-entries st)
+                  (len (mgt-token-to-id st)))))
+
+(defthm count-prefix-entries-equals-prefix-len-1
+  (implies (mgt-state-p st)
+           (equal (count-prefix-entries st)
+                  (len (mgt-prefixes st)))))
+
+(defthm count-suffix-entries-equals-suffix-len-1
+  (implies (mgt-state-p st)
+           (equal (count-suffix-entries st)
+                  (len (mgt-suffixes st)))))
+
+(defthm count-bpe-merges-equals-bpe-len-1
+  (implies (mgt-state-p st)
+           (equal (count-bpe-merges st)
+                  (len (mgt-bpe-pairs st)))))
+
+(defthm total-morpheme-count-expansion-1
+  (implies (mgt-state-p st)
+           (equal (total-morpheme-count st)
+                  (+ (len (mgt-prefixes st))
+                     (len (mgt-suffixes st))
+                     (len (mgt-roots st))))))
+
+(defthm has-token-p-iff-lookup-token-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (iff (has-token-p st token)
+                (lookup-token token (mgt-token-to-id st)))))
+
+(defthm has-id-p-iff-lookup-id-1
+  (implies (and (mgt-state-p st) (natp id))
+           (iff (has-id-p st id)
+                (lookup-id id (mgt-id-to-token st)))))
+
+(defthm get-token-id-is-lookup-token-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (get-token-id st token)
+                  (lookup-token token (mgt-token-to-id st)))))
+
+(defthm get-id-token-is-lookup-id-1
+  (implies (and (mgt-state-p st) (natp id))
+           (equal (get-id-token st id)
+                  (lookup-id id (mgt-id-to-token st)))))
+
+(defthm is-prefix-p-iff-prefix-lookup-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (iff (is-prefix-p st token)
+                (lookup-token token (mgt-prefixes st)))))
+
+(defthm is-suffix-p-iff-suffix-lookup-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (iff (is-suffix-p st token)
+                (lookup-token token (mgt-suffixes st)))))
+
+(defthm is-root-p-iff-root-lookup-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (iff (is-root-p st token)
+                (lookup-token token (mgt-roots st)))))
+
+(defthm classify-token-special-1
+  (implies (and (mgt-state-p st) (stringp token) (is-special-token token))
+           (equal (classify-token st token) :special)))
+
+(defthm classify-token-prefix-1
+  (implies (and (mgt-state-p st) (stringp token)
+                (not (is-special-token token))
+                (is-prefix-p st token))
+           (equal (classify-token st token) :prefix)))
+
+(defthm classify-token-suffix-1
+  (implies (and (mgt-state-p st) (stringp token)
+                (not (is-special-token token))
+                (not (is-prefix-p st token))
+                (is-suffix-p st token))
+           (equal (classify-token st token) :suffix)))
+
+(defthm classify-token-root-1
+  (implies (and (mgt-state-p st) (stringp token)
+                (not (is-special-token token))
+                (not (is-prefix-p st token))
+                (not (is-suffix-p st token))
+                (is-root-p st token))
+           (equal (classify-token st token) :root)))
+
+(defthm classify-token-word-1
+  (implies (and (mgt-state-p st) (stringp token)
+                (not (is-special-token token))
+                (not (is-prefix-p st token))
+                (not (is-suffix-p st token))
+                (not (is-root-p st token))
+                (has-token-p st token))
+           (equal (classify-token st token) :word)))
+
+(defthm classify-token-unknown-1
+  (implies (and (mgt-state-p st) (stringp token)
+                (not (is-special-token token))
+                (not (is-prefix-p st token))
+                (not (is-suffix-p st token))
+                (not (is-root-p st token))
+                (not (has-token-p st token)))
+           (equal (classify-token st token) :unknown)))
+
+(defthm natp-of-lookup-token-after-add-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (natp (mv-nth 1 (add-token-to-state st token))))
+  :rule-classes :type-prescription)
+
+(defthm add-token-to-state-preserves-state-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (mgt-state-p (mv-nth 0 (add-token-to-state st token)))))
+
+(defthm add-token-to-state-preserves-token-list-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (token-list-p (mgt-token-to-id (mv-nth 0 (add-token-to-state st token))))))
+
+(defthm add-token-to-state-preserves-id-list-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (id-list-p (mgt-id-to-token (mv-nth 0 (add-token-to-state st token))))))
+
+(defthm add-token-to-state-next-id-natp-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (natp (mgt-next-id (mv-nth 0 (add-token-to-state st token)))))
+  :rule-classes :type-prescription)
+
+(defthm add-token-to-state-lookup-token-after-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (lookup-token token (mgt-token-to-id (mv-nth 0 (add-token-to-state st token))))
+                  (mv-nth 1 (add-token-to-state st token)))))
+
+(defthm add-token-to-state-lookup-id-after-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (lookup-id (mv-nth 1 (add-token-to-state st token))
+                             (mgt-id-to-token (mv-nth 0 (add-token-to-state st token))))
+                  token)))
+
+(defthm add-token-to-state-vocab-monotone-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (<= (len (mgt-token-to-id st))
+               (len (mgt-token-to-id (mv-nth 0 (add-token-to-state st token))))))
+  :rule-classes :linear)
+
+(defthm add-token-to-state-id-map-monotone-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (<= (len (mgt-id-to-token st))
+               (len (mgt-id-to-token (mv-nth 0 (add-token-to-state st token))))))
+  :rule-classes :linear)
+
+(defthm add-token-to-state-next-id-monotone-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (<= (mgt-next-id st)
+               (mgt-next-id (mv-nth 0 (add-token-to-state st token)))))
+  :rule-classes :linear)
+
+(defthm add-token-to-state-preserves-prefix-count-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (len (mgt-prefixes (mv-nth 0 (add-token-to-state st token))))
+                  (len (mgt-prefixes st)))))
+
+(defthm add-token-to-state-preserves-suffix-count-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (len (mgt-suffixes (mv-nth 0 (add-token-to-state st token))))
+                  (len (mgt-suffixes st)))))
+
+(defthm add-token-to-state-preserves-root-count-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (len (mgt-roots (mv-nth 0 (add-token-to-state st token))))
+                  (len (mgt-roots st)))))
+
+(defthm add-token-to-state-preserves-bpe-count-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (equal (len (mgt-bpe-pairs (mv-nth 0 (add-token-to-state st token))))
+                  (len (mgt-bpe-pairs st)))))
+
+(defthm add-tokens-to-state-preserves-state-1
+  (implies (and (mgt-state-p st) (string-list-p toks))
+           (mgt-state-p (add-tokens-to-state st toks))))
+
+(defthm add-tokens-to-state-next-id-monotone-1
+  (implies (and (mgt-state-p st) (string-list-p toks))
+           (<= (mgt-next-id st)
+               (mgt-next-id (add-tokens-to-state st toks))))
+  :rule-classes :linear)
+
+(defthm add-tokens-to-state-vocab-monotone-1
+  (implies (and (mgt-state-p st) (string-list-p toks))
+           (<= (len (mgt-token-to-id st))
+               (len (mgt-token-to-id (add-tokens-to-state st toks)))))
+  :rule-classes :linear)
+
+(defthm add-tokens-to-state-id-map-monotone-1
+  (implies (and (mgt-state-p st) (string-list-p toks))
+           (<= (len (mgt-id-to-token st))
+               (len (mgt-id-to-token (add-tokens-to-state st toks)))))
+  :rule-classes :linear)
+
+(defthm add-prefix-to-state-preserves-state-1
+  (implies (and (mgt-state-p st) (stringp prefix))
+           (mgt-state-p (add-prefix-to-state st prefix))))
+
+(defthm add-suffix-to-state-preserves-state-1
+  (implies (and (mgt-state-p st) (stringp suffix))
+           (mgt-state-p (add-suffix-to-state st suffix))))
+
+(defthm add-prefixes-to-state-preserves-state-1
+  (implies (and (mgt-state-p st) (string-list-p prefixes))
+           (mgt-state-p (add-prefixes-to-state st prefixes))))
+
+(defthm add-suffixes-to-state-preserves-state-1
+  (implies (and (mgt-state-p st) (string-list-p suffixes))
+           (mgt-state-p (add-suffixes-to-state st suffixes))))
+
+(defthm init-special-tokens-preserves-state-1
+  (implies (mgt-state-p st)
+           (mgt-state-p (init-special-tokens st))))
+
+(defthm init-special-tokens-has-pad-1
+  (implies (mgt-state-p st)
+           (lookup-token "[PAD]" (mgt-token-to-id (init-special-tokens st)))))
+
+(defthm init-special-tokens-has-unk-1
+  (implies (mgt-state-p st)
+           (lookup-token "[UNK]" (mgt-token-to-id (init-special-tokens st)))))
+
+(defthm init-special-tokens-has-bos-1
+  (implies (mgt-state-p st)
+           (lookup-token "[BOS]" (mgt-token-to-id (init-special-tokens st)))))
+
+(defthm init-special-tokens-has-eos-1
+  (implies (mgt-state-p st)
+           (lookup-token "[EOS]" (mgt-token-to-id (init-special-tokens st)))))
+
+(defthm init-morphemes-preserves-state-1
+  (implies (mgt-state-p st)
+           (mgt-state-p (init-morphemes st))))
+
+(defthm init-morphemes-prefix-count-monotone-1
+  (implies (mgt-state-p st)
+           (<= (len (mgt-prefixes st))
+               (len (mgt-prefixes (init-morphemes st)))))
+  :rule-classes :linear)
+
+(defthm init-morphemes-suffix-count-monotone-1
+  (implies (mgt-state-p st)
+           (<= (len (mgt-suffixes st))
+               (len (mgt-suffixes (init-morphemes st)))))
+  :rule-classes :linear)
+
+(defthm init-byte-tokens-preserves-state-1
+  (implies (and (mgt-state-p st) (natp n))
+           (mgt-state-p (init-byte-tokens st n))))
+
+(defthm init-byte-tokens-next-id-monotone-1
+  (implies (and (mgt-state-p st) (natp n))
+           (<= (mgt-next-id st)
+               (mgt-next-id (init-byte-tokens st n))))
+  :rule-classes :linear)
+
+(defthm train-bpe-preserves-state-1
+  (implies (and (mgt-state-p st) (string-list-p corpus) (natp num-merges))
+           (mgt-state-p (train-bpe st corpus num-merges))))
+
+(defthm train-bpe-next-id-monotone-1
+  (implies (and (mgt-state-p st) (string-list-p corpus) (natp num-merges))
+           (<= (mgt-next-id st)
+               (mgt-next-id (train-bpe st corpus num-merges))))
+  :rule-classes :linear)
+
+(defthm train-bpe-bpe-count-monotone-1
+  (implies (and (mgt-state-p st) (string-list-p corpus) (natp num-merges))
+           (<= (len (mgt-bpe-pairs st))
+               (len (mgt-bpe-pairs (train-bpe st corpus num-merges)))))
+  :rule-classes :linear)
+
+(defthm remove-vocab-word-preserves-state-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (mgt-state-p (remove-vocab-word st word))))
+
+(defthm remove-vocab-word-token-count-nonincrease-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (<= (len (mgt-token-to-id (remove-vocab-word st word)))
+               (len (mgt-token-to-id st))))
+  :rule-classes :linear)
+
+(defthm remove-vocab-word-id-count-nonincrease-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (<= (len (mgt-id-to-token (remove-vocab-word st word)))
+               (len (mgt-id-to-token st))))
+  :rule-classes :linear)
+
+(defthm remove-vocab-word-prefix-count-nonincrease-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (<= (len (mgt-prefixes (remove-vocab-word st word)))
+               (len (mgt-prefixes st))))
+  :rule-classes :linear)
+
+(defthm remove-vocab-word-suffix-count-nonincrease-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (<= (len (mgt-suffixes (remove-vocab-word st word)))
+               (len (mgt-suffixes st))))
+  :rule-classes :linear)
+
+(defthm remove-vocab-word-root-count-nonincrease-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (<= (len (mgt-roots (remove-vocab-word st word)))
+               (len (mgt-roots st))))
+  :rule-classes :linear)
+
+(defthm remove-vocab-word-bpe-count-nonincrease-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (<= (len (mgt-bpe-pairs (remove-vocab-word st word)))
+               (len (mgt-bpe-pairs st))))
+  :rule-classes :linear)
+
+(defthm remove-vocab-word-next-id-preserved-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (equal (mgt-next-id (remove-vocab-word st word))
+                  (mgt-next-id st))))
+
+(defthm remove-special-pad-identity-1
+  (implies (mgt-state-p st)
+           (equal (remove-vocab-word st "[PAD]") st)))
+
+(defthm remove-special-unk-identity-1
+  (implies (mgt-state-p st)
+           (equal (remove-vocab-word st "[UNK]") st)))
+
+(defthm remove-special-bos-identity-1
+  (implies (mgt-state-p st)
+           (equal (remove-vocab-word st "[BOS]") st)))
+
+(defthm remove-special-eos-identity-1
+  (implies (mgt-state-p st)
+           (equal (remove-vocab-word st "[EOS]") st)))
+
+(defthm encode-text-produces-nat-list-1
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm encode-text-empty-1
+  (implies (mgt-state-p st)
+           (equal (encode-text st "") nil)))
+
+(defthm encode-text-validates-1
+  (implies (and (mgt-state-p st) (stringp text))
+           (booleanp (validate-tokens st (encode-text st text))))
+  :rule-classes :type-prescription)
+
+(defthm decode-tokens-produces-string-1
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm decode-tokens-empty-1
+  (implies (mgt-state-p st)
+           (equal (decode-tokens st nil) "")))
+
+(defthm encode-batch-produces-true-list-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (true-listp (encode-batch st texts))))
+
+(defthm encode-batch-length-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch-decode-produces-string-list-1
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (string-list-p (batch-decode st token-lists))))
+
+(defthm batch-decode-length-1
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+(defthm count-known-chars-type-1
+  (implies (and (mgt-state-p st) (stringp text) (natp pos) (natp count))
+           (natp (count-known-chars st text pos count)))
+  :rule-classes :type-prescription)
+
+(defthm count-known-chars-monotone-in-count-1
+  (implies (and (mgt-state-p st) (stringp text) (natp pos) (natp count))
+           (<= count (count-known-chars st text pos count)))
+  :rule-classes :linear)
+
+(defthm coverage-ratio-type-1
+  (implies (and (mgt-state-p st) (stringp corpus))
+           (natp (coverage-ratio st corpus)))
+  :rule-classes :type-prescription)
+
+(defthm coverage-ratio-nonnegative-1
+  (implies (and (mgt-state-p st) (stringp corpus))
+           (<= 0 (coverage-ratio st corpus)))
+  :rule-classes :linear)
+
+(defthm tensor-p-of-encode-to-tensor-1
+  (implies (and (mgt-state-p st) (stringp text))
+           (tensor-p (encode-to-tensor st text))))
+
+(defthm tensor-p-of-encode-batch-to-tensor-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (tensor-p (encode-batch-to-tensor st texts))))
+
+(defthm stringp-of-decode-from-tensor-1
+  (implies (and (mgt-state-p st) (tensor-p tensor))
+           (stringp (decode-from-tensor st tensor)))
+  :rule-classes :type-prescription)
+
+(defthm nat-listp-of-tensor-data-to-tokens-1
+  (implies (tensor-data-p data)
+           (nat-listp (tensor-data-to-tokens data))))
+
+(defthm safe-nth-token-type-1
+  (implies (and (natp n) (nat-listp toks))
+           (natp (safe-nth-token n toks)))
+  :rule-classes :type-prescription)
+
+(defthm window-tokens-type-1
+  (implies (and (nat-listp toks) (natp start) (natp size))
+           (true-listp (window-tokens toks start size))))
+
+(defthm state-snapshot-true-listp-1
+  (implies (mgt-state-p st)
+           (true-listp (state-snapshot st))))
+
+(defthm snapshot-next-id-type-1
+  (implies (and (true-listp snap) (equal (len snap) 7))
+           (natp (snapshot-next-id snap)))
+  :rule-classes :type-prescription)
+
+(defthm snapshot-vocab-size-type-1
+  (implies (and (true-listp snap) (equal (len snap) 7))
+           (natp (snapshot-vocab-size snap)))
+  :rule-classes :type-prescription)
+
+(defthm compare-snapshots-monotonic-boolean-1
+  (implies (and (true-listp s1) (equal (len s1) 7)
+                (true-listp s2) (equal (len s2) 7)
+                (natp (nth 6 s1)) (natp (nth 6 s2)))
+           (booleanp (compare-snapshots-monotonic s1 s2)))
+  :rule-classes :type-prescription)
+
+(defthm empty-state-verified-1
+  (empty-state-has-no-tokens))
+
+(defthm unknown-always-unk-1
+  (verify-unknown-always-unk))
+
+(defthm special-tokens-present-after-init-1
+  (let ((st (init-special-tokens (make-empty-mgt-state))))
+    (special-tokens-present-p st)))
+
+(defthm verify-special-token-ids-after-init-1
+  (let ((st (init-special-tokens (make-empty-mgt-state))))
+    (verify-special-token-ids st)))
+
+(defthm encode-is-deterministic-1
+  (implies (and (mgt-state-p st) (stringp text))
+           (encode-text-deterministic-check st text)))
+
+(defthm add-token-idempotent-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (verify-add-token-idempotence st token)))
+
+(defthm batch-size-preserved-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (batch-size-preserved-check st texts)))
+
+(defthm decode-batch-size-preserved-1
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (decode-batch-size-check st token-lists)))
+
+(defthm lookup-token-after-add-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (lookup-token-after-add st token)))
+
+(defthm lookup-id-after-add-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (lookup-id-after-add st token)))
+
+(defthm vocab-grows-on-add-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (vocab-grows-on-new-token st token)))
+
+(defthm remove-then-lookup-fails-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (remove-then-lookup-fails st word)))
+
+(defthm prefix-id-matches-token-id-1
+  (implies (mgt-state-p st)
+           (prefix-id-matches-token-id st)))
+
+(defthm suffix-id-matches-token-id-1
+  (implies (mgt-state-p st)
+           (suffix-id-matches-token-id st)))
+
+(defthm token-to-id-consistency-1
+  (implies (mgt-state-p st)
+           (token-to-id-consistent-p (mgt-token-to-id st)
+                                     (mgt-id-to-token st))))
+
+(defthm id-to-token-consistency-1
+  (implies (mgt-state-p st)
+           (id-to-token-consistent-p (mgt-id-to-token st)
+                                     (mgt-token-to-id st))))
+
+(defthm mgt-consistent-p-forward-1
+  (implies (mgt-consistent-p st)
+           (and (token-to-id-consistent-p (mgt-token-to-id st) (mgt-id-to-token st))
+                (id-to-token-consistent-p (mgt-id-to-token st) (mgt-token-to-id st))))
+  :rule-classes :forward-chaining)
+
+(defthm mgt-well-formed-p-forward-1
+  (implies (mgt-well-formed-p st)
+           (and (mgt-consistent-p st)
+                (equal (len (mgt-token-to-id st))
+                       (len (mgt-id-to-token st)))
+                (all-ids-below (mgt-token-to-id st) (mgt-next-id st))))
+  :rule-classes :forward-chaining)
+
+(defthm token-list-contains-iff-has-token-1
+  (implies (and (mgt-state-p st) (stringp token))
+           (iff (token-list-contains-p token (mgt-token-to-id st))
+                (has-token-p st token))))
+
+(defthm id-list-contains-iff-has-id-1
+  (implies (and (mgt-state-p st) (natp id))
+           (iff (id-list-contains-p id (mgt-id-to-token st))
+                (has-id-p st id))))
+
+(defthm count-unk-nonnegative-1
+  (implies (nat-listp toks)
+           (<= 0 (count-unk toks)))
+  :rule-classes :linear)
+
+(defthm count-non-unk-nonnegative-1
+  (implies (nat-listp toks)
+           (<= 0 (count-non-unk toks)))
+  :rule-classes :linear)
+
+(defthm count-unk-plus-count-non-unk-1
+  (implies (nat-listp toks)
+           (equal (+ (count-unk toks) (count-non-unk toks))
+                  (len toks))))
+
+(defthm filter-special-tokens-type-1
+  (implies (nat-listp toks)
+           (nat-listp (filter-special-tokens toks))))
+
+(defthm filter-special-tokens-length-1
+  (implies (nat-listp toks)
+           (<= (len (filter-special-tokens toks))
+               (len toks)))
+  :rule-classes :linear)
+
+(defthm reverse-nat-list-type-1
+  (implies (and (nat-listp xs) (nat-listp acc))
+           (nat-listp (reverse-nat-list xs acc))))
+
+(defthm reverse-nat-list-length-1
+  (implies (and (nat-listp xs) (nat-listp acc))
+           (equal (len (reverse-nat-list xs acc))
+                  (+ (len xs) (len acc)))))
+
+(defthm take-n-true-listp-1
+  (true-listp (take-n n x)))
+
+(defthm drop-n-true-listp-1
+  (implies (true-listp x)
+           (true-listp (drop-n n x))))
+
+(defthm split-token-list-at-types-1
+  (implies (and (nat-listp toks) (natp n))
+           (and (true-listp (mv-nth 0 (split-token-list-at toks n)))
+                (true-listp (mv-nth 1 (split-token-list-at toks n))))))
+
+(defthm unique-tokens-in-list-type-1
+  (implies (and (nat-listp toks) (nat-listp acc))
+           (nat-listp (unique-tokens-in-list toks seen acc))))
+
+(defthm unique-tokens-in-list-length-bound-1
+  (implies (and (nat-listp toks) (nat-listp acc))
+           (<= (len (unique-tokens-in-list toks seen acc))
+               (+ (len toks) (len acc))))
+  :rule-classes :linear)
+
+(defthm token-frequency-count-true-listp-1
+  (implies (and (nat-listp toks) (true-listp freq))
+           (true-listp (token-frequency-count toks freq))))
+
+(defthm sum-frequencies-type-1
+  (implies (true-listp freq)
+           (natp (sum-frequencies freq)))
+  :rule-classes :type-prescription)
+
+(defthm map-encode-text-true-listp-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (true-listp (map-encode-text st texts))))
+
+(defthm map-encode-text-length-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (map-encode-text st texts))
+                  (len texts))))
+
+(defthm map-decode-tokens-string-listp-1
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (string-list-p (map-decode-tokens st token-lists))))
+
+(defthm map-decode-tokens-length-1
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (map-decode-tokens st token-lists))
+                  (len token-lists))))
+
+(defthm encode-multiple-texts-true-listp-1
+  (implies (and (mgt-state-p st) (string-list-p texts) (true-listp acc))
+           (true-listp (encode-multiple-texts st texts acc))))
+
+(defthm encode-multiple-texts-length-1
+  (implies (and (mgt-state-p st) (string-list-p texts) (true-listp acc))
+           (equal (len (encode-multiple-texts st texts acc))
+                  (+ (len texts) (len acc)))))
+
+(defthm decode-multiple-token-lists-string-listp-1
+  (implies (and (mgt-state-p st) (true-listp token-lists) (string-list-p acc))
+           (string-list-p (decode-multiple-token-lists st token-lists acc))))
+
+(defthm decode-multiple-token-lists-length-1
+  (implies (and (mgt-state-p st) (true-listp token-lists) (string-list-p acc))
+           (equal (len (decode-multiple-token-lists st token-lists acc))
+                  (+ (len token-lists) (len acc)))))
+
+(defthm token-list-to-nat-list-type-1
+  (implies (token-list-p xs)
+           (nat-listp (token-list-to-nat-list xs))))
+
+(defthm token-list-to-nat-list-length-1
+  (implies (token-list-p xs)
+           (equal (len (token-list-to-nat-list xs))
+                  (len xs))))
+
+(defthm token-list-to-string-list-type-1
+  (implies (token-list-p xs)
+           (string-list-p (token-list-to-string-list xs))))
+
+(defthm token-list-to-string-list-length-1
+  (implies (token-list-p xs)
+           (equal (len (token-list-to-string-list xs))
+                  (len xs))))
+
+(defthm id-list-to-nat-list-type-1
+  (implies (id-list-p xs)
+           (nat-listp (id-list-to-nat-list xs))))
+
+(defthm id-list-to-string-list-type-1
+  (implies (id-list-p xs)
+           (string-list-p (id-list-to-string-list xs))))
+
+(defthm bpe-pair-keys-type-1
+  (implies (bpe-pair-list-p xs)
+           (string-list-p (bpe-pair-keys xs))))
+
+(defthm bpe-pair-token-ids-type-1
+  (implies (bpe-pair-list-p xs)
+           (nat-listp (bpe-pair-token-ids xs))))
+
+(defthm bpe-pair-priorities-type-1
+  (implies (bpe-pair-list-p xs)
+           (nat-listp (bpe-pair-priorities xs))))
+
+(defthm all-bpe-tokens-in-vocab-base-1
+  (all-bpe-tokens-in-vocab nil t2i))
+
+(defthm sequence-total-length-type-1
+  (implies (true-listp seqs)
+           (natp (sequence-total-length seqs)))
+  :rule-classes :type-prescription)
+
+(defthm apply-n-merges-shrinks-type-1
+  (implies (and (nat-listp seq) (natp n) (natp a) (natp b) (natp c))
+           (nat-listp (apply-n-merges-shrinks seq n a b c))))
+
+(defthm make-input-triple-true-listp-1
+  (implies (and (mgt-state-p st) (stringp text) (natp max-len))
+           (true-listp (make-input-triple st text max-len))))
+
+(defthm decode-bpe-tokens-aux-type-1
+  (implies (and (mgt-state-p st) (nat-listp toks) (nat-listp acc))
+           (nat-listp (decode-bpe-tokens-aux st toks acc))))
+
+(defthm decode-hex-byte-token-flag-boolean-1
+  (implies (stringp token-str)
+           (booleanp (mv-nth 0 (decode-hex-byte-token token-str))))
+  :rule-classes :type-prescription)
+
+(defthm decode-hex-byte-token-byte-natp-1
+  (implies (stringp token-str)
+           (natp (mv-nth 1 (decode-hex-byte-token token-str))))
+  :rule-classes :type-prescription)
+
+(defthm hex-digit-to-nat-type-1
+  (implies (characterp c)
+           (natp (hex-digit-to-nat c)))
+  :rule-classes :type-prescription)
+
+(defthm hex-digit-to-nat-bound-1
+  (implies (characterp c)
+           (< (hex-digit-to-nat c) 16))
+  :rule-classes :linear)
+
+(defthm byte-to-hex-token-stringp-1
+  (implies (natp b)
+           (stringp (byte-to-hex-token b)))
+  :rule-classes :type-prescription)
+
+(defthm text-to-byte-seq-type-1
+  (implies (and (stringp text) (natp pos) (nat-listp acc))
+           (nat-listp (text-to-byte-seq text pos acc))))
+
+(defthm text-to-token-seq-type-1
+  (implies (and (mgt-state-p st) (stringp text) (natp pos) (nat-listp acc))
+           (nat-listp (text-to-token-seq st text pos acc))))
+
+(defthm corpus-to-seqs-true-listp-1
+  (implies (and (mgt-state-p st) (string-list-p corpus) (true-listp acc))
+           (true-listp (corpus-to-seqs st corpus acc))))
+
+(defthm train-bpe-step-statep-1
+  (implies (and (mgt-state-p st) (true-listp seqs) (natp merge-count))
+           (mgt-state-p (mv-nth 0 (train-bpe-step st seqs merge-count)))))
+
+(defthm train-bpe-step-seqs-true-listp-1
+  (implies (and (mgt-state-p st) (true-listp seqs) (natp merge-count))
+           (true-listp (mv-nth 1 (train-bpe-step st seqs merge-count)))))
+
+(defthm apply-merge-to-seq-type-1
+  (implies (and (nat-listp seq) (natp a) (natp b) (natp c) (nat-listp acc))
+           (nat-listp (apply-merge-to-seq seq a b c acc))))
+
+(defthm apply-merge-to-seq-length-bound-1
+  (implies (and (nat-listp seq) (natp a) (natp b) (natp c))
+           (<= (len (apply-merge-to-seq seq a b c nil))
+               (len seq)))
+  :rule-classes :linear)
+
+(defthm apply-merge-to-seqs-true-listp-1
+  (implies (and (true-listp seqs) (natp a) (natp b) (natp c))
+           (true-listp (apply-merge-to-seqs seqs a b c))))
+
+(defthm apply-merge-to-seqs-length-1
+  (implies (and (true-listp seqs) (natp a) (natp b) (natp c))
+           (equal (len (apply-merge-to-seqs seqs a b c))
+                  (len seqs))))
+
+(defthm count-pairs-in-seq-true-listp-1
+  (implies (and (nat-listp seq) (true-listp pair-counts))
+           (true-listp (count-pairs-in-seq seq pair-counts))))
+
+(defthm count-pairs-in-seqs-true-listp-1
+  (implies (and (true-listp seqs) (true-listp pair-counts))
+           (true-listp (count-pairs-in-seqs seqs pair-counts))))
+
+(defthm find-best-pair-freq-type-1
+  (implies (natp best-freq)
+           (natp (mv-nth 1 (find-best-pair counts best-key best-freq))))
+  :rule-classes :type-prescription)
+
+(defthm find-best-pair-freq-monotone-1
+  (implies (natp best-freq)
+           (<= best-freq (mv-nth 1 (find-best-pair counts best-key best-freq))))
+  :rule-classes :linear)
+
+(defthm count-token-list-type-1
+  (implies (token-list-p x)
+           (natp (count-token-list x)))
+  :rule-classes :type-prescription)
+
+(defthm count-id-list-type-1
+  (implies (id-list-p x)
+           (natp (count-id-list x)))
+  :rule-classes :type-prescription)
+
+(defthm sequence-total-length-nonnegative-1
+  (implies (true-listp seqs)
+           (<= 0 (sequence-total-length seqs)))
+  :rule-classes :linear)
+
+(defthm count-token-list-equals-len-1
+  (implies (token-list-p x)
+           (equal (count-token-list x) (len x))))
+
+(defthm count-id-list-equals-len-1
+  (implies (id-list-p x)
+           (equal (count-id-list x) (len x))))
+
+(defthm encode-to-tensor-shape-type-1
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (tensor-shape (encode-to-tensor st text)))))
+
+(defthm encode-to-tensor-data-type-1
+  (implies (and (mgt-state-p st) (stringp text))
+           (tensor-data-p (tensor-data (encode-to-tensor st text)))))
+
+(defthm encode-batch-to-tensor-shape-type-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (nat-listp (tensor-shape (encode-batch-to-tensor st texts)))))
+
+(defthm encode-batch-to-tensor-data-type-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (tensor-data-p (tensor-data (encode-batch-to-tensor st texts)))))
+
+(defthm state-snapshot-next-id-equals-field-1
+  (implies (mgt-state-p st)
+           (equal (snapshot-next-id (state-snapshot st))
+                  (mgt-next-id st))))
+
+(defthm state-snapshot-vocab-size-equals-field-1
+  (implies (mgt-state-p st)
+           (equal (snapshot-vocab-size (state-snapshot st))
+                  (len (mgt-token-to-id st)))))
+
+(defthm compare-snapshots-reflexive-1
+  (implies (and (true-listp snap) (equal (len snap) 7) (natp (nth 6 snap)))
+           (compare-snapshots-monotonic snap snap)))
+
+(defthm compare-snapshots-transitive-1
+  (implies (and (true-listp a) (equal (len a) 7) (natp (nth 6 a))
+                (true-listp b) (equal (len b) 7) (natp (nth 6 b))
+                (true-listp c) (equal (len c) 7) (natp (nth 6 c))
+                (compare-snapshots-monotonic a b)
+                (compare-snapshots-monotonic b c))
+           (compare-snapshots-monotonic a c)))
+
+(defthm encode-single-char-type-1
+  (implies (and (mgt-state-p st) (characterp c))
+           (natp (encode-single-char st c)))
+  :rule-classes :type-prescription)
+
+(defthm decode-single-token-type-1
+  (implies (and (mgt-state-p st) (natp tid))
+           (stringp (decode-single-token st tid)))
+  :rule-classes :type-prescription)
+
+(defthm all-tokens-are-known-iff-validate-1
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (iff (all-tokens-are-known st tokens)
+                (validate-tokens st tokens))))
+
+(defthm all-prefixes-are-tokens-base-1
+  (all-prefixes-are-tokens nil t2i))
+
+(defthm all-suffixes-are-tokens-base-1
+  (all-suffixes-are-tokens nil t2i))
+
+(defthm morpheme-consistency-forward-1
+  (implies (morpheme-consistency-p st)
+           (and (all-prefixes-are-tokens (mgt-prefixes st) (mgt-token-to-id st))
+                (all-suffixes-are-tokens (mgt-suffixes st) (mgt-token-to-id st))))
+  :rule-classes :forward-chaining)
+
+(defthm encode-char-by-char-type-1
+  (implies (and (mgt-state-p st) (stringp text) (natp pos) (nat-listp acc))
+           (nat-listp (encode-char-by-char st text pos acc))))
+
+(defthm greedy-tokenize-type-1
+  (implies (and (mgt-state-p st) (stringp text) (natp pos) (nat-listp acc))
+           (nat-listp (greedy-tokenize st text pos acc))))
+
+(defthm longest-match-type-1
+  (implies (and (mgt-state-p st) (stringp word) (natp pos))
+           (natp (longest-match st word pos)))
+  :rule-classes :type-prescription)
+
+(defthm longest-match-nonnegative-1
+  (implies (and (mgt-state-p st) (stringp word) (natp pos))
+           (<= 0 (longest-match st word pos)))
+  :rule-classes :linear)
+
+(defthm longest-match-aux-type-1
+  (implies (natp best)
+           (natp (longest-match-aux st word pos end best)))
+  :rule-classes :type-prescription)
+
+(defthm longest-match-aux-monotone-best-1
+  (implies (natp best)
+           (<= best (longest-match-aux st word pos end best)))
+  :rule-classes :linear)
+
+(defthm morph-decompose-type-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (or (null (morph-decompose st word))
+               (nat-listp (morph-decompose st word))))
+  :rule-classes :type-prescription)
+
+(defthm find-longest-prefix-type-1
+  (implies (token-list-p prefix-list)
+           (or (null (find-longest-prefix word prefix-list))
+               (token-entry-p (find-longest-prefix word prefix-list))))
+  :rule-classes :type-prescription)
+
+(defthm find-longest-suffix-type-1
+  (implies (token-list-p suffix-list)
+           (or (null (find-longest-suffix word suffix-list))
+               (token-entry-p (find-longest-suffix word suffix-list))))
+  :rule-classes :type-prescription)
+
+(defthm encode-word-type-1
+  (implies (and (mgt-state-p st) (stringp word))
+           (nat-listp (encode-word st word))))
+
+(defthm find-word-end-type-1
+  (implies (and (stringp text) (natp pos))
+           (natp (find-word-end st text pos)))
+  :rule-classes :type-prescription)
+
+(defthm find-word-end-lower-bound-1
+  (implies (and (stringp text) (natp pos) (<= pos (length text)))
+           (<= pos (find-word-end st text pos)))
+  :rule-classes :linear)
+
+(defthm find-word-end-upper-bound-1
+  (implies (and (stringp text) (natp pos) (<= pos (length text)))
+           (<= (find-word-end st text pos) (length text)))
+  :rule-classes :linear)
+
+(defthm check-special-token-at-type-1
+  (implies (and (stringp text) (natp pos))
+           (natp (check-special-token-at text pos)))
+  :rule-classes :type-prescription)
+
+(defthm check-special-token-at-bound-1
+  (implies (and (stringp text) (natp pos))
+           (<= (check-special-token-at text pos) 5))
+  :rule-classes :linear)
+
+(defthm encode-aux-type-1
+  (implies (and (mgt-state-p st) (stringp text) (natp pos) (nat-listp acc))
+           (nat-listp (encode-aux st text pos acc))))
+
+(defthm decode-token-type-1
+  (implies (and (mgt-state-p st) (natp tok))
+           (stringp (decode-token st tok)))
+  :rule-classes :type-prescription)
+
+(defthm decode-tokens-aux-type-1
+  (implies (and (mgt-state-p st) (nat-listp tokens) (stringp acc))
+           (stringp (decode-tokens-aux st tokens acc)))
+  :rule-classes :type-prescription)
+
+(defthm reconstruct-token-list-type-1
+  (implies (true-listp serialized)
+           (token-list-p (reconstruct-from-serialized-token-list serialized))))
+
+(defthm reconstruct-id-list-type-1
+  (implies (true-listp serialized)
+           (id-list-p (reconstruct-from-serialized-id-list serialized))))
+
+(defthm reconstruct-bpe-list-type-1
+  (implies (true-listp serialized)
+           (bpe-pair-list-p (reconstruct-from-serialized-bpe-list serialized))))
+
+(defthm serialize-token-list-true-listp-1
+  (implies (token-list-p xs)
+           (true-listp (serialize-token-list xs))))
+
+(defthm serialize-id-list-true-listp-1
+  (implies (id-list-p xs)
+           (true-listp (serialize-id-list xs))))
+
+(defthm serialize-bpe-list-true-listp-1
+  (implies (bpe-pair-list-p xs)
+           (true-listp (serialize-bpe-list xs))))
+
+(defthm serialize-mgt-state-true-listp-1
+  (implies (mgt-state-p st)
+           (true-listp (serialize-mgt-state st))))
+
+(defthm string-length-bounded-boolean-1
+  (implies (and (stringp str) (natp bound))
+           (booleanp (string-length-bounded str bound)))
+  :rule-classes :type-prescription)
+
+(defthm all-token-strings-bounded-boolean-1
+  (implies (and (token-list-p lst) (natp bound))
+           (booleanp (all-token-strings-bounded lst bound)))
+  :rule-classes :type-prescription)
+
+(defthm all-token-strings-bounded-base-1
+  (all-token-strings-bounded nil bound))
+
+(defthm max-nat-list-type-1
+  (implies (natp current)
+           (natp (max-nat-list lst current)))
+  :rule-classes :type-prescription)
+
+(defthm min-nat-list-type-1
+  (implies (natp current)
+           (natp (min-nat-list lst current)))
+  :rule-classes :type-prescription)
+
+(defthm batch-statistics-true-listp-1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (true-listp (batch-statistics st texts))))
+
+(defthm verify-state-invariant-after-ops-1
+  (implies (and (mgt-state-p st) (stringp token1) (stringp token2))
+           (verify-state-invariant-after-ops st token1 token2)))
+
+(defthm chain-add-n-tokens-statep-1
+  (implies (and (mgt-state-p st) (string-list-p tokens))
+           (mgt-state-p (chain-add-n-tokens st tokens))))
+
+(defthm chain-add-n-tokens-next-id-monotone-1
+  (implies (and (mgt-state-p st) (string-list-p tokens))
+           (<= (mgt-next-id st)
+               (mgt-next-id (chain-add-n-tokens st tokens))))
+  :rule-classes :linear)
+
+(defthm all-added-tokens-findable-1
+  (implies (and (mgt-state-p st) (string-list-p tokens))
+           (all-added-tokens-findable st tokens)))
+
+(defthm verify-encode-produces-valid-tokens-1
+  (implies (and (mgt-state-p st) (stringp text))
+           (verify-encode-produces-valid-tokens st text)))
+
+(defthm verify-batch-encode-all-valid-base-1
+  (verify-batch-encode-all-valid (make-empty-mgt-state) nil))
+
+(defthm string-concat-list-type-1
+  (implies (string-list-p strs)
+           (stringp (string-concat-list strs)))
+  :rule-classes :type-prescription)
+
+(defthm decode-tokens-to-list-type-1
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (string-list-p (decode-tokens-to-list st toks))))
+
+(defthm decode-tokens-to-list-length-1
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (equal (len (decode-tokens-to-list st toks))
+                  (len toks))))
+
+(defthm encode-decode-roundtrip-check-type-1
+  (implies (and (mgt-state-p st) (stringp text))
+           (stringp (encode-decode-roundtrip-check st text)))
+  :rule-classes :type-prescription)
+
+(defthm safe-decode-type-1
+  (implies (and (mgt-state-p st) (nat-listp tokens))
+           (stringp (safe-decode st tokens)))
+  :rule-classes :type-prescription)
+
+(defthm compare-snapshots-monotonic-self-1
+  (let ((snap (state-snapshot (make-empty-mgt-state))))
+    (compare-snapshots-monotonic snap snap)))
+
+(defthm mgt_token_to_id_preserved_under_init_specials_1
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-token-to-id (init-special-tokens st)))))
+
+(defthm mgt_token_to_id_preserved_under_init_morphemes_1
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-token-to-id (init-morphemes st)))))
+
+(defthm mgt_token_to_id_preserved_under_remove_vocab_1
+  (implies (and (mgt-state-p st) (stringp word))
+           (token-list-p (mgt-token-to-id (remove-vocab-word st word)))))
+
+
+(defthm mgt_id_to_token_preserved_under_init_specials_2
+  (implies (mgt-state-p st)
+           (id-list-p (mgt-id-to-token (init-special-tokens st)))))
+
+(defthm mgt_id_to_token_preserved_under_init_morphemes_2
+  (implies (mgt-state-p st)
+           (id-list-p (mgt-id-to-token (init-morphemes st)))))
+
+(defthm mgt_id_to_token_preserved_under_remove_vocab_2
+  (implies (and (mgt-state-p st) (stringp word))
+           (id-list-p (mgt-id-to-token (remove-vocab-word st word)))))
+
+
+(defthm mgt_prefixes_preserved_under_init_specials_3
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-prefixes (init-special-tokens st)))))
+
+(defthm mgt_prefixes_preserved_under_init_morphemes_3
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-prefixes (init-morphemes st)))))
+
+(defthm mgt_prefixes_preserved_under_remove_vocab_3
+  (implies (and (mgt-state-p st) (stringp word))
+           (token-list-p (mgt-prefixes (remove-vocab-word st word)))))
+
+
+(defthm mgt_suffixes_preserved_under_init_specials_4
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-suffixes (init-special-tokens st)))))
+
+(defthm mgt_suffixes_preserved_under_init_morphemes_4
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-suffixes (init-morphemes st)))))
+
+(defthm mgt_suffixes_preserved_under_remove_vocab_4
+  (implies (and (mgt-state-p st) (stringp word))
+           (token-list-p (mgt-suffixes (remove-vocab-word st word)))))
+
+
+(defthm mgt_roots_preserved_under_init_specials_5
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-roots (init-special-tokens st)))))
+
+(defthm mgt_roots_preserved_under_init_morphemes_5
+  (implies (mgt-state-p st)
+           (token-list-p (mgt-roots (init-morphemes st)))))
+
+(defthm mgt_roots_preserved_under_remove_vocab_5
+  (implies (and (mgt-state-p st) (stringp word))
+           (token-list-p (mgt-roots (remove-vocab-word st word)))))
+
+
+(defthm mgt_bpe_pairs_preserved_under_init_specials_6
+  (implies (mgt-state-p st)
+           (bpe-pair-list-p (mgt-bpe-pairs (init-special-tokens st)))))
+
+(defthm mgt_bpe_pairs_preserved_under_init_morphemes_6
+  (implies (mgt-state-p st)
+           (bpe-pair-list-p (mgt-bpe-pairs (init-morphemes st)))))
+
+(defthm mgt_bpe_pairs_preserved_under_remove_vocab_6
+  (implies (and (mgt-state-p st) (stringp word))
+           (bpe-pair-list-p (mgt-bpe-pairs (remove-vocab-word st word)))))
+
+
+(defthm vocab_size_natp_generated_1
+  (implies (mgt-state-p st)
+           (natp (vocab-size st)))
+  :rule-classes :type-prescription)
+
+(defthm vocab_size_nonnegative_generated_1
+  (implies (mgt-state-p st)
+           (<= 0 (vocab-size st)))
+  :rule-classes :linear)
+
+
+(defthm count_vocab_entries_natp_generated_2
+  (implies (mgt-state-p st)
+           (natp (count-vocab-entries st)))
+  :rule-classes :type-prescription)
+
+(defthm count_vocab_entries_nonnegative_generated_2
+  (implies (mgt-state-p st)
+           (<= 0 (count-vocab-entries st)))
+  :rule-classes :linear)
+
+
+(defthm count_prefix_entries_natp_generated_3
+  (implies (mgt-state-p st)
+           (natp (count-prefix-entries st)))
+  :rule-classes :type-prescription)
+
+(defthm count_prefix_entries_nonnegative_generated_3
+  (implies (mgt-state-p st)
+           (<= 0 (count-prefix-entries st)))
+  :rule-classes :linear)
+
+
+(defthm count_suffix_entries_natp_generated_4
+  (implies (mgt-state-p st)
+           (natp (count-suffix-entries st)))
+  :rule-classes :type-prescription)
+
+(defthm count_suffix_entries_nonnegative_generated_4
+  (implies (mgt-state-p st)
+           (<= 0 (count-suffix-entries st)))
+  :rule-classes :linear)
+
+
+(defthm count_bpe_merges_natp_generated_5
+  (implies (mgt-state-p st)
+           (natp (count-bpe-merges st)))
+  :rule-classes :type-prescription)
+
+(defthm count_bpe_merges_nonnegative_generated_5
+  (implies (mgt-state-p st)
+           (<= 0 (count-bpe-merges st)))
+  :rule-classes :linear)
+
+
+(defthm total_morpheme_count_natp_generated_6
+  (implies (mgt-state-p st)
+           (natp (total-morpheme-count st)))
+  :rule-classes :type-prescription)
+
+(defthm total_morpheme_count_nonnegative_generated_6
+  (implies (mgt-state-p st)
+           (<= 0 (total-morpheme-count st)))
+  :rule-classes :linear)
+
+
+(defthm encode_text_type_generated_1
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_1
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_1
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_1
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_2
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_2
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_2
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_2
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_3
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_3
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_3
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_3
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_4
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_4
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_4
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_4
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_5
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_5
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_5
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_5
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_6
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_6
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_6
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_6
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_7
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_7
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_7
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_7
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_8
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_8
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_8
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_8
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_9
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_9
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_9
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_9
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
+
+(defthm encode_text_type_generated_10
+  (implies (and (mgt-state-p st) (stringp text))
+           (nat-listp (encode-text st text))))
+
+(defthm decode_tokens_type_generated_10
+  (implies (and (mgt-state-p st) (nat-listp toks))
+           (stringp (decode-tokens st toks)))
+  :rule-classes :type-prescription)
+
+(defthm encode_batch_length_generated_10
+  (implies (and (mgt-state-p st) (string-list-p texts))
+           (equal (len (encode-batch st texts))
+                  (len texts))))
+
+(defthm batch_decode_length_generated_10
+  (implies (and (mgt-state-p st) (true-listp token-lists))
+           (equal (len (batch-decode st token-lists))
+                  (len token-lists))))
+
