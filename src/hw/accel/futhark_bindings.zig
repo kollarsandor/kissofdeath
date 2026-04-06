@@ -70,7 +70,6 @@ pub extern "c" fn futhark_entry_clip_fisher(ctx: ?*struct_futhark_context, out: 
 pub extern "c" fn futhark_entry_reduce_gradients(ctx: ?*struct_futhark_context, out: ?*?*struct_futhark_f32_1d, gradients: ?*struct_futhark_f32_2d) c_int;
 pub extern "c" fn futhark_entry_rank_segments(ctx: ?*struct_futhark_context, out: ?*?*struct_futhark_f32_1d, query_hash: u64, segment_hashes: ?*struct_futhark_u64_1d, base_scores: ?*struct_futhark_f32_1d) c_int;
 
-// Frissitett RSF forward: affin coupling szignatura (bias-ok + clip parameterek)
 pub extern "c" fn futhark_entry_rsf_forward(
     ctx: ?*struct_futhark_context,
     out: ?*?*struct_futhark_f16_2d,
@@ -83,7 +82,6 @@ pub extern "c" fn futhark_entry_rsf_forward(
     clip_max: u16,
 ) c_int;
 
-// RSF grad: affin coupling backward
 pub extern "c" fn futhark_entry_rsf_grad(
     ctx: ?*struct_futhark_context,
     out_grad_s: ?*?*struct_futhark_f16_2d,
@@ -102,7 +100,6 @@ pub extern "c" fn futhark_entry_rsf_grad(
 
 pub extern "c" fn futhark_entry_scale_weights_inplace(ctx: ?*struct_futhark_context, weights: ?*struct_futhark_f16_2d, scale: f32) c_int;
 
-// Frissitett training_step: bias-ok es clip parameterek hozzaadva
 pub extern "c" fn futhark_entry_training_step(
     ctx: ?*struct_futhark_context,
     new_weights_s: ?*?*struct_futhark_f16_2d,

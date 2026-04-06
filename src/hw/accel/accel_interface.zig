@@ -1,7 +1,3 @@
-// accel_interface.zig — RSFAccelerator frissitve: bias-ok es clip ertekek hozzaadva
-// Az eredeti fajl tobbi resze (FutharkContext, FutharkArray*, GPUOps stb.) valtozatlan marad;
-// csak az RSFAccelerator struct es metodusai kerulnek frissitesre.
-
 const std = @import("std");
 const futhark = @import("futhark_bindings.zig");
 const core_tensor = @import("../../core/tensor.zig");
@@ -111,20 +107,17 @@ pub const FutharkArray1DF32 = struct {
     }
 };
 
-// ============================================================
-// RSFAccelerator — affin coupling GPU gyorsito
-// ============================================================
 pub const RSFAccelerator = struct {
     ctx: FutharkContext,
     weights_s: FutharkArray2DF16,
     weights_t: FutharkArray2DF16,
-    s_bias: FutharkArray1DF16,    // Uj: scale bias
-    t_bias: FutharkArray1DF16,    // Uj: translation bias
+    s_bias: FutharkArray1DF16,
+    t_bias: FutharkArray1DF16,
     velocity_s: FutharkArray2DF16,
     velocity_t: FutharkArray2DF16,
     model_dim: usize,
-    clip_min: f16,                // Uj: default -5.0
-    clip_max: f16,                // Uj: default  5.0
+    clip_min: f16,
+    clip_max: f16,
     initialized: bool,
 
     const Self = @This();
@@ -294,9 +287,6 @@ pub const RSFAccelerator = struct {
     }
 };
 
-// ============================================================
-// GPUOps — altalanos GPU utility muveletek (valtozatlan)
-// ============================================================
 pub const GPUOps = struct {
     ctx: FutharkContext,
 
