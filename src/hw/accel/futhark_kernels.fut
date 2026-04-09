@@ -28,44 +28,6 @@ let dot_product [n] (a: [n]f32) (b: [n]f32): f32 =
   let result = reduce (+) 0f32 products
   in if f32.isnan result then 0f32 else result
 
-let softmax [n] (x: [n]f32): [n]f32 =
-  if n == 0 then x
-  else
-    let clean = map (\xi -> if f32.isnan xi then -f32.inf else xi) x
-    let max_val = reduce f32.max (-f32.inf) clean
-    in if f32.isinf max_val && max_val < 0f32
-       then replicate n (1f32 / f32.i64 n)
-       else
-         let exp_x = map (\xi -> f32.exp (xi - max_val)) clean
-         let total = reduce (+) 0f32 exp_x
-         in if total <= 0f32 || f32.isnan total
-            then replicate n (1f32 / f32.i64 n)
-            else map (\e -> e / total) exp_x
-
-let layer_norm [n] (x: [n]f32) (gamma: [n]f32) (beta: [n]f32) (eps: f32): [n]f32 =
-  if n == 0 then x
-  else
-    let safe_eps = f32.max eps 1e-12f32
-    let clean = map (\xi -> if f32.isnan xi then 0f32 else xi) x
-    let mean_val = (reduce (+) 0f32 clean) / f32.i64 n
-    let centered = map (\xi -> xi - mean_val) clean
-    let variance = (reduce (+) 0f32 (map (\c -> c * c) centered)) / f32.i64 n
-    let std_dev = f32.sqrt (f32.max variance 0f32 + safe_eps)
-    in map3 (\c g b -> g * (c / std_dev) + b) centered gamma beta
-
-let relu [n] (x: [n]f32): [n]f32 =
-  map (\xi -> if f32.isnan xi then 0f32 else f32.max 0f32 xi) x
-
-let gelu [n] (x: [n]f32): [n]f32 =
-  let sqrt_2_over_pi = 0.7978845608028654f32
-  in map (\xi ->
-    if f32.isnan xi then 0f32
-    else
-      let xi2 = xi * xi
-      let cdf = 0.5f32 * (1f32 + f32.tanh (sqrt_2_over_pi * (xi + 0.044715f32 * xi2 * xi)))
-      in xi * cdf
-  ) x
-
 let spectral_clip [n] (fisher: [n]f32) (clip_val: f32): [n]f32 =
   let safe_clip = f32.max clip_val 0f32
   in map (\f ->
@@ -132,24 +94,27 @@ let rsf_scatter [n] (x: [n]f32) (indices: [n]i64): [n]f32 =
       else x[i]
     )
 
-let rsf_flow [n] (x: [n]f32) (s_weight: [n]f32) (t_weight: [n]f32) (s_bias: [n]f32) (t_bias: [n]f32): [n]f32 =
-  if n < 2 then copy x
-  else
-    let half = n / 2
-    let x_s = tabulate half (\i -> x[i] * s_weight[i] + s_bias[i])
-    let x_t = tabulate half (\i -> x[i + half] * t_weight[i + half] + t_bias[i + half])
-    let combined_lower = map2 (+) x_s x_t
-    let combined_upper = map2 (-) x_s x_t
-    let base = combined_lower ++ combined_upper
-    in tabulate n (\i ->
-      if i < half * 2 then base[i] else x[i]
-    )
+let rsf_flow [half] (x: [half*2]f32) (s_weight: [half][half]f32) (t_weight: [half][half]f32) (s_bias: [half]f32) (t_bias: [half]f32): [half*2]f32 =
+  let d = half * 2
+  let clip_min = -5.0f32
+  let clip_max = 5.0f32
+  let x1 = x[0:half] :> [half]f32
+  let x2 = x[half:d] :> [half]f32
+  let scale = tabulate half (\j ->
+    let raw = s_bias[j] + reduce (+) 0f32 (map2 (*) s_weight[j] x2)
+    let clipped = f32.max clip_min (f32.min clip_max raw)
+    in f32.exp clipped
+  )
+  let y1 = map2 (*) x1 scale
+  let trans = tabulate half (\j ->
+    t_bias[j] + reduce (+) 0f32 (map2 (*) t_weight[j] y1)
+  )
+  let y2 = map2 (+) x2 trans
+  in (y1 ++ y2) :> [half*2]f32
 
-let rsf_forward_layer [n] (x: [n]f32) (s_weight: [n]f32) (t_weight: [n]f32) (s_bias: [n]f32) (t_bias: [n]f32) (perm_indices: [n]i64): [n]f32 =
-  if n < 2 then copy x
-  else
-    let scattered = rsf_scatter x perm_indices
-    in rsf_flow scattered s_weight t_weight s_bias t_bias
+let rsf_forward_layer [half] (x: [half*2]f32) (s_weight: [half][half]f32) (t_weight: [half][half]f32) (s_bias: [half]f32) (t_bias: [half]f32) (perm_indices: [half*2]i64): [half*2]f32 =
+  let scattered = rsf_scatter x perm_indices
+  in rsf_flow scattered s_weight t_weight s_bias t_bias
 
 let rsf_backward_scatter [n] (grad: [n]f32) (indices: [n]i64): [n]f32 =
   if n < 2 then copy grad
@@ -171,40 +136,49 @@ let rsf_backward_scatter [n] (grad: [n]f32) (indices: [n]i64): [n]f32 =
       if i < half * 2 then base[i] else grad[i]
     )
 
-let rsf_backward_flow [n] (grad_out: [n]f32) (x: [n]f32) (s_weight: [n]f32) (t_weight: [n]f32): ([n]f32, [n]f32, [n]f32, [n]f32, [n]f32) =
-  if n < 2 then (copy grad_out, replicate n 0f32, replicate n 0f32, replicate n 0f32, replicate n 0f32)
-  else
-    let half = n / 2
-    let grad_lower = tabulate half (\i -> grad_out[i])
-    let grad_upper = tabulate half (\i -> grad_out[i + half])
-    let grad_sum = map2 (+) grad_lower grad_upper
-    let grad_diff = map2 (-) grad_lower grad_upper
-    let grad_x = tabulate n (\i ->
-      if i < half then grad_sum[i] * s_weight[i]
-      else if i < half * 2 then grad_diff[i - half] * t_weight[i]
-      else grad_out[i]
-    )
-    let grad_s_w = tabulate n (\i ->
-      if i < half then x[i] * grad_sum[i] else 0f32
-    )
-    let grad_t_w = tabulate n (\i ->
-      if i >= half && i < half * 2 then x[i] * grad_diff[i - half] else 0f32
-    )
-    let grad_s_b = tabulate n (\i ->
-      if i < half then grad_sum[i] else 0f32
-    )
-    let grad_t_b = tabulate n (\i ->
-      if i >= half && i < half * 2 then grad_diff[i - half] else 0f32
-    )
-    in (grad_x, grad_s_w, grad_t_w, grad_s_b, grad_t_b)
+let rsf_backward_flow [half] (grad_out: [half*2]f32) (x: [half*2]f32) (s_weight: [half][half]f32) (t_weight: [half][half]f32) (s_bias: [half]f32) (t_bias: [half]f32): ([half*2]f32, [half][half]f32, [half][half]f32, [half]f32, [half]f32) =
+  let d = half * 2
+  let clip_min = -5.0f32
+  let clip_max = 5.0f32
+  let x1 = x[0:half] :> [half]f32
+  let x2 = x[half:d] :> [half]f32
+  let pre_scale = tabulate half (\j ->
+    s_bias[j] + reduce (+) 0f32 (map2 (*) s_weight[j] x2)
+  )
+  let scale = map (\ps ->
+    let clipped = f32.max clip_min (f32.min clip_max ps)
+    in f32.exp clipped
+  ) pre_scale
+  let y1 = map2 (*) x1 scale
+  let dy1 = grad_out[0:half] :> [half]f32
+  let dy2 = grad_out[half:d] :> [half]f32
+  let dy1_total = tabulate half (\j ->
+    dy1[j] + reduce (+) 0f32 (tabulate half (\k -> t_weight[k][j] * dy2[k]))
+  )
+  let ds = tabulate half (\j ->
+    let in_range = pre_scale[j] >= clip_min && pre_scale[j] <= clip_max
+    in if in_range then dy1_total[j] * y1[j] else 0f32
+  )
+  let dx1 = map2 (*) dy1_total scale
+  let dx2 = tabulate half (\j ->
+    dy2[j] + reduce (+) 0f32 (tabulate half (\k -> s_weight[k][j] * ds[k]))
+  )
+  let grad_x = (dx1 ++ dx2) :> [half*2]f32
+  let grad_ws = tabulate half (\j ->
+    tabulate half (\k -> ds[j] * x2[k])
+  )
+  let grad_wt = tabulate half (\j ->
+    tabulate half (\k -> dy2[j] * y1[k])
+  )
+  let grad_sb = copy ds
+  let grad_tb = copy dy2
+  in (grad_x, grad_ws, grad_wt, grad_sb, grad_tb)
 
-let rsf_backward_layer [n] (grad_out: [n]f32) (x: [n]f32) (s_weight: [n]f32) (t_weight: [n]f32) (perm_indices: [n]i64): ([n]f32, [n]f32, [n]f32, [n]f32, [n]f32) =
-  if n < 2 then (copy grad_out, replicate n 0f32, replicate n 0f32, replicate n 0f32, replicate n 0f32)
-  else
-    let scattered_x = rsf_scatter x perm_indices
-    let (grad_flow, grad_s_w, grad_t_w, grad_s_b, grad_t_b) = rsf_backward_flow grad_out scattered_x s_weight t_weight
-    let grad_x = rsf_backward_scatter grad_flow perm_indices
-    in (grad_x, grad_s_w, grad_t_w, grad_s_b, grad_t_b)
+let rsf_backward_layer [half] (grad_out: [half*2]f32) (x: [half*2]f32) (s_weight: [half][half]f32) (t_weight: [half][half]f32) (s_bias: [half]f32) (t_bias: [half]f32) (perm_indices: [half*2]i64): ([half*2]f32, [half][half]f32, [half][half]f32, [half]f32, [half]f32) =
+  let scattered_x = rsf_scatter x perm_indices
+  let (grad_flow, grad_s_w, grad_t_w, grad_s_b, grad_t_b) = rsf_backward_flow grad_out scattered_x s_weight t_weight s_bias t_bias
+  let grad_x = rsf_backward_scatter grad_flow perm_indices
+  in (grad_x, grad_s_w, grad_t_w, grad_s_b, grad_t_b)
 
 let hash_sequence [m] (tokens: [m]u32): u64 =
   loop h = 14695981039346656037u64 for i < m do
@@ -284,65 +258,27 @@ let lsh_hash [n] (vec: [n]f32) (num_tables: i64) (seed: u64): [num_tables]u64 =
       in if proj > 0f32 then 1u64 else 0u64
     )
 
-let rsf_relational_context [seq_len][d_model] (spectral_input: [seq_len][d_model]f32) (temporal_input: [seq_len][d_model]f32) (value: [seq_len][d_model]f32) (s_weight: [d_model]f32) (t_weight: [d_model]f32) (eps: f32): [seq_len][d_model]f32 =
+let rsf_relational_context [seq_len][d_model] (spectral_input: [seq_len][d_model]f32) (_temporal_input: [seq_len][d_model]f32) (value: [seq_len][d_model]f32) (s_weight: [d_model]f32) (t_weight: [d_model]f32) (_eps: f32): [seq_len][d_model]f32 =
   if seq_len == 0 || d_model == 0 then copy value
   else
-    let safe_eps = f32.max eps 1e-12f32
-    let inv_sqrt_d = 1f32 / f32.sqrt (f32.max 1f32 (f32.i64 d_model))
-    let s_sum = reduce (+) 0f32 s_weight
-    let t_sum = reduce (+) 0f32 t_weight
-    let residual_scale = (s_sum + t_sum) * inv_sqrt_d * inv_sqrt_d
-    let spectral_scores = map (\row ->
-      let weighted = map2 (*) row s_weight
-      in tabulate seq_len (\j ->
-        reduce (+) 0f32 (map2 (*) weighted value[j]) * inv_sqrt_d
-      )
+    let half = d_model / 2
+    let clip_min = -5.0f32
+    let clip_max = 5.0f32
+    in map (\s_row ->
+      let x1 = take half s_row :> [half]f32
+      let x2 = drop half s_row :> [half]f32
+      let s_w1 = take half s_weight :> [half]f32
+      let t_w1 = take half t_weight :> [half]f32
+      let scale = map2 (\xi wi ->
+        let raw = xi * wi
+        let clipped = f32.max clip_min (f32.min clip_max raw)
+        in f32.exp clipped
+      ) x2 s_w1
+      let y1 = map2 (*) x1 scale
+      let trans = map2 (*) y1 t_w1
+      let y2 = map2 (+) x2 trans
+      in (y1 ++ y2) :> [d_model]f32
     ) spectral_input
-    let temporal_scores = map (\row ->
-      let weighted = map2 (*) row t_weight
-      in tabulate seq_len (\j ->
-        reduce (+) 0f32 (map2 (*) weighted value[j]) * inv_sqrt_d
-      )
-    ) temporal_input
-    let relational_weights = map2 (\s_row t_row ->
-      let combined = map2 (+) s_row t_row
-      let max_v = reduce f32.max (-f32.inf) combined
-      let exp_vals = map (\xi -> f32.exp (xi - max_v)) combined
-      let total = reduce (+) 0f32 exp_vals
-      in (if total <= 0f32 || f32.isnan total
-         then replicate seq_len (1f32 / f32.i64 seq_len)
-         else map (\e -> e / total) exp_vals) :> [seq_len]f32
-    ) spectral_scores temporal_scores
-    let output = map (\weights ->
-      tabulate d_model (\d ->
-        reduce (+) 0f32 (map2 (\w j -> w * value[j, d]) weights (iota seq_len))
-      )
-    ) relational_weights
-    let with_residual = map2 (\out_row inp_row ->
-      map2 (\o xi -> o + xi * residual_scale) out_row inp_row
-    ) output spectral_input
-    in map (\row ->
-      let row_mean = (reduce (+) 0f32 row) / f32.i64 d_model
-      let centered = map (\xi -> xi - row_mean) row
-      let variance = (reduce (+) 0f32 (map (\c -> c * c) centered)) / f32.i64 d_model
-      let row_std = f32.sqrt (f32.max variance 0f32 + safe_eps)
-      in map (\c -> c / row_std) centered
-    ) with_residual
-
-let conv1d [input_len][kernel_size] (input: [input_len]f32) (kernel: [kernel_size]f32): []f32 =
-  let out_len = i64.max 0 (input_len - kernel_size + 1)
-  in tabulate out_len (\i ->
-    reduce (+) 0f32 (map2 (*) (input[i:i+kernel_size] :> [kernel_size]f32) kernel)
-  )
-
-let maxpool1d [input_len] (input: [input_len]f32) (pool_size: i64): []f32 =
-  if pool_size <= 0 then map (\xi -> xi) input
-  else
-    let out_len = input_len / pool_size
-    in tabulate out_len (\i ->
-      let pool_start = i * pool_size
-      in reduce f32.max (-f32.inf) (input[pool_start:pool_start+pool_size] :> [pool_size]f32)
-    )
 
 let elem_add [n] (a: [n]f32) (b: [n]f32): [n]f32 = map2 (+) a b
 let elem_mul [n] (a: [n]f32) (b: [n]f32): [n]f32 = map2 (*) a b
@@ -367,11 +303,6 @@ entry matmul [m][n][k] (a: [m][k]f32) (b: [k][n]f32): [m][n]f32 = matmul_tiled a
 entry batch_matmul [b][m][n][k] (a: [b][m][k]f32) (c: [b][k][n]f32): [b][m][n]f32 = batched_matmul a c
 entry dot [n] (a: [n]f32) (b: [n]f32): f32 = dot_product a b
 
-entry apply_softmax [n] (x: [n]f32): [n]f32 = softmax x
-entry apply_layer_norm [n] (x: [n]f32) (gamma: [n]f32) (beta: [n]f32) (eps: f32): [n]f32 = layer_norm x gamma beta eps
-entry apply_relu [n] (x: [n]f32): [n]f32 = relu x
-entry apply_gelu [n] (x: [n]f32): [n]f32 = gelu x
-
 entry clip_fisher [n] (fisher: [n]f32) (clip_val: f32): [n]f32 = spectral_clip fisher clip_val
 entry reduce_gradients [b][n] (gradients: [b][n]f32): [n]f32 = batch_reduce gradients
 entry update_fisher [n] (fisher: [n]f32) (grad: [n]f32) (decay: f32): [n]f32 = fisher_diagonal_update fisher grad decay
@@ -382,8 +313,8 @@ entry select_topk [n] (k: i64) (scores: [n]f32): ([]f32, []i64) =
   let safe_k = i64.max 0 k
   in topk safe_k scores (iota n)
 
-entry rsf_forward [n] (x: [n]f32) (s_w: [n]f32) (t_w: [n]f32) (s_b: [n]f32) (t_b: [n]f32) (perm: [n]i64): [n]f32 = rsf_forward_layer x s_w t_w s_b t_b perm
-entry rsf_backward [n] (grad: [n]f32) (x: [n]f32) (s_w: [n]f32) (t_w: [n]f32) (perm: [n]i64): ([n]f32, [n]f32, [n]f32, [n]f32, [n]f32) = rsf_backward_layer grad x s_w t_w perm
+entry rsf_forward [half] (x: [half*2]f32) (s_w: [half][half]f32) (t_w: [half][half]f32) (s_b: [half]f32) (t_b: [half]f32) (perm: [half*2]i64): [half*2]f32 = rsf_forward_layer x s_w t_w s_b t_b perm
+entry rsf_backward [half] (grad: [half*2]f32) (x: [half*2]f32) (s_w: [half][half]f32) (t_w: [half][half]f32) (s_b: [half]f32) (t_b: [half]f32) (perm: [half*2]i64): ([half*2]f32, [half][half]f32, [half][half]f32, [half]f32, [half]f32) = rsf_backward_layer grad x s_w t_w s_b t_b perm
 
 entry ssi_hash_tokens [m] (tokens: [m]u32): u64 = hash_sequence tokens
 entry ssi_find_nearest [n][m] (tree: [n]u64) (query: [m]u32): i64 = ssi_search tree query
@@ -396,9 +327,6 @@ entry compute_ngram_hashes [n] (tokens: [n]u32) (ngram_size: i64): []u64 = ngram
 entry compute_lsh [n] (vec: [n]f32) (num_tables: i64) (seed: u64): [num_tables]u64 = lsh_hash vec num_tables seed
 
 entry compute_rsf_context [seq_len][d_model] (spectral_input: [seq_len][d_model]f32) (temporal_input: [seq_len][d_model]f32) (value: [seq_len][d_model]f32) (s_weight: [d_model]f32) (t_weight: [d_model]f32) (eps: f32): [seq_len][d_model]f32 = rsf_relational_context spectral_input temporal_input value s_weight t_weight eps
-
-entry apply_conv1d [input_len][kernel_size] (input: [input_len]f32) (kernel: [kernel_size]f32): []f32 = conv1d input kernel
-entry apply_maxpool1d [input_len] (input: [input_len]f32) (pool_size: i64): []f32 = maxpool1d input pool_size
 
 entry add_arrays [n] (a: [n]f32) (b: [n]f32): [n]f32 = elem_add a b
 entry mul_arrays [n] (a: [n]f32) (b: [n]f32): [n]f32 = elem_mul a b

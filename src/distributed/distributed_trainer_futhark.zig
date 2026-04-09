@@ -4,13 +4,14 @@ const MGT = @import("../tokenizer/mgt.zig").MGT;
 const accel = @import("../hw/accel/accel_interface.zig");
 const RSFAccelerator = accel.RSFAccelerator;
 const FutharkArray2DF16 = accel.FutharkArray2DF16;
+const FutharkArray1DF16 = accel.FutharkArray1DF16;
 const PinnedMemory = accel.PinnedMemory;
 
 pub const TrainerConfig = struct {
     learning_rate: f32 = 0.001,
     momentum: f32 = 0.0,
     max_line_size: usize = 10 * 1024 * 1024,
-    checkpoint_version: u32 = 2,
+    checkpoint_version: u32 = 3,
 };
 
 pub const DistributedTrainerFuthark = struct {
@@ -527,6 +528,25 @@ pub const DistributedTrainerFuthark = struct {
             }
         }
 
+        const s_bias_vals = try self.accelerator.s_bias.values1D(&self.accelerator.ctx, self.allocator);
+        defer self.allocator.free(s_bias_vals);
+
+        for (s_bias_vals) |b| {
+            const b_f32: f32 = @floatCast(b);
+            try writer.writeInt(u32, @as(u32, @bitCast(b_f32)), .little);
+        }
+
+        const t_bias_vals = try self.accelerator.t_bias.values1D(&self.accelerator.ctx, self.allocator);
+        defer self.allocator.free(t_bias_vals);
+
+        for (t_bias_vals) |b| {
+            const b_f32: f32 = @floatCast(b);
+            try writer.writeInt(u32, @as(u32, @bitCast(b_f32)), .little);
+        }
+
+        try writer.writeInt(u32, @as(u32, @bitCast(@as(f32, @floatCast(self.accelerator.clip_min)))), .little);
+        try writer.writeInt(u32, @as(u32, @bitCast(@as(f32, @floatCast(self.accelerator.clip_max)))), .little);
+
         try buffered_writer.flush();
         try file.sync();
 
@@ -585,6 +605,34 @@ pub const DistributedTrainerFuthark = struct {
 
         try self.accelerator.setWeightsS(s_weights, self.model_dim, self.model_dim);
         try self.accelerator.setWeightsT(t_weights, self.model_dim, self.model_dim);
+
+        const s_bias_data = try self.allocator.alloc(f16, self.model_dim);
+        defer self.allocator.free(s_bias_data);
+
+        for (s_bias_data) |*b| {
+            const bits = try reader.readInt(u32, .little);
+            const f32_val: f32 = @bitCast(bits);
+            b.* = @floatCast(f32_val);
+        }
+
+        const t_bias_data = try self.allocator.alloc(f16, self.model_dim);
+        defer self.allocator.free(t_bias_data);
+
+        for (t_bias_data) |*b| {
+            const bits = try reader.readInt(u32, .little);
+            const f32_val: f32 = @bitCast(bits);
+            b.* = @floatCast(f32_val);
+        }
+
+        try self.accelerator.setSBias(s_bias_data, self.model_dim);
+        try self.accelerator.setTBias(t_bias_data, self.model_dim);
+
+        const clip_min_bits = try reader.readInt(u32, .little);
+        const clip_max_bits = try reader.readInt(u32, .little);
+        const clip_min_f32: f32 = @bitCast(clip_min_bits);
+        const clip_max_f32: f32 = @bitCast(clip_max_bits);
+        try self.accelerator.setClipRange(@floatCast(clip_min_f32), @floatCast(clip_max_f32));
+
         try self.accelerator.sync();
 
         std.debug.print("Checkpoint loaded from {s} at step {d}\n", .{ path, self.global_step });
