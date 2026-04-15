@@ -327,14 +327,14 @@ def get_model_bytes(model_filename: str) -> bytes:
 
 @app.local_entrypoint()
 def main(
-    epochs: int = 10,
-    batch_size: int = 16,
-    learning_rate: float = 0.001,
-    dim: int = 128,
-    layers: int = 4,
-    sample_limit: int = 100,
-    noise_level: float = 0.05,
-    gradient_clip: float = 5.0,
+    epochs: int = 50,
+    batch_size: int = 128,
+    learning_rate: float = 0.0005,
+    dim: int = 512,
+    layers: int = 8,
+    sample_limit: int = 50000,
+    noise_level: float = 0.01,
+    gradient_clip: float = 1.0,
 ):
     separator = "=" * 70
     print(separator)
