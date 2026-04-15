@@ -16,6 +16,15 @@ app = modal.App("jaide-v40-training")
 
 volume = modal.Volume.from_name("jaide-training-data", create_if_missing=True)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Modal image – valódi RSF architektúra: distributed_trainer_futhark.zig
+# A Futhark trainer importálja:
+#   - gpu_coordinator.zig
+#   - ../tokenizer/mgt.zig
+#   - ../hw/accel/accel_interface.zig  (RSFAccelerator, FutharkArray2DF16, PinnedMemory)
+# Az --main-pkg-path /jaide_src biztosítja, hogy az összes @import() megtalálja
+# a megfelelő forrást a src/ mappán belül.
+# ─────────────────────────────────────────────────────────────────────────────
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install(
@@ -25,9 +34,12 @@ image = (
         "git",
         "ca-certificates",
         "xz-utils",
+        # NCCL + CUDA függőségek a multi-GPU allReduce-hoz
+        "libgomp1",
     )
     .pip_install("datasets", "huggingface_hub")
     .run_commands(
+        # Zig 0.13.0 telepítése
         "curl -sSf https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz -o /tmp/zig.tar.xz",
         "tar -xf /tmp/zig.tar.xz -C /tmp",
         "mv /tmp/zig-linux-x86_64-0.13.0 /usr/local/zig",
@@ -36,8 +48,17 @@ image = (
     )
     .add_local_dir("src", remote_path="/jaide_src", copy=True)
     .run_commands(
-        "zig build-exe /jaide_src/main.zig -O ReleaseFast -fstrip -femit-bin=/root/main",
-        "chmod +x /root/main",
+        # Valódi RSF + Futhark distributed trainer fordítása
+        # --main-pkg-path: az összes @import() az /jaide_src gyökérhez képest értendő
+        # Így a distributed_trainer_futhark.zig megtalálja:
+        #   gpu_coordinator.zig          -> /jaide_src/distributed/gpu_coordinator.zig
+        #   ../tokenizer/mgt.zig         -> /jaide_src/tokenizer/mgt.zig
+        #   ../hw/accel/accel_interface  -> /jaide_src/hw/accel/accel_interface.zig
+        "zig build-exe /jaide_src/distributed/distributed_trainer_futhark.zig "
+        "--main-pkg-path /jaide_src "
+        "-O ReleaseFast -fstrip "
+        "-femit-bin=/root/distributed_trainer",
+        "chmod +x /root/distributed_trainer",
     )
 )
 
@@ -45,11 +66,12 @@ WORK_DIR = Path("/workspace")
 SRC_MOUNT = Path("/jaide_src")
 DATASET_PATH = Path("/dataset/train.jsonl")
 MODELS_DIR = Path("/models")
-BINARY_PATH = Path("/root/main")
+BINARY_PATH = Path("/root/distributed_trainer")
 
 GPU_TYPES = ["B200"]
 GPU_COUNT = 8
 DEFAULT_GPU_CONFIG = f"{GPU_COUNT}x {GPU_TYPES[0]}"
+
 
 class TrainingParameters(TypedDict):
     epochs: int
@@ -60,6 +82,7 @@ class TrainingParameters(TypedDict):
     sample_limit: int
     noise_level: float
     gradient_clip: float
+
 
 class TrainingResult(TypedDict):
     status: str
@@ -72,6 +95,7 @@ class TrainingResult(TypedDict):
     timestamp: float
     parameters: Optional[TrainingParameters]
 
+
 class ModelInfo(TypedDict):
     filename: str
     size_bytes: int
@@ -79,9 +103,11 @@ class ModelInfo(TypedDict):
     modified: float
     path: str
 
+
 class ListModelsResult(TypedDict):
     models: List[ModelInfo]
     training_logs: List[TrainingResult]
+
 
 def _download_finephrase_to_jsonl() -> None:
     from datasets import load_dataset
@@ -105,17 +131,20 @@ def _download_finephrase_to_jsonl() -> None:
                 f_out.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
     logger.info(f"Finephrase dataset saved to {DATASET_PATH}")
 
+
 def _ensure_positive(name: str, value: Union[int, float]) -> float:
     val = float(value)
     if val <= 0:
         raise ValueError(f"{name} must be > 0, got {value}")
     return val
 
+
 def _ensure_non_negative(name: str, value: Union[int, float]) -> float:
     val = float(value)
     if val < 0:
         raise ValueError(f"{name} must be >= 0, got {value}")
     return val
+
 
 def _validate_int(name: str, value: Any) -> int:
     if isinstance(value, bool):
@@ -128,6 +157,7 @@ def _validate_int(name: str, value: Any) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be a positive int, got {value}")
     return value
+
 
 @app.function(
     image=image,
@@ -164,7 +194,10 @@ def train_jaide_rsf(
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
         if not BINARY_PATH.is_file():
-            raise FileNotFoundError(f"Compiled binary not found at: {BINARY_PATH}")
+            raise FileNotFoundError(
+                f"Compiled binary not found at: {BINARY_PATH}\n"
+                "Valószínű ok: a distributed_trainer_futhark.zig fordítása meghiúsult az image build során."
+            )
 
         if not DATASET_PATH.is_file():
             logger.info("Dataset not found locally, downloading HuggingFaceFW/finephrase...")
@@ -198,13 +231,18 @@ def train_jaide_rsf(
         env.update({
             "JAIDE_GPU_COUNT": str(GPU_COUNT),
             "JAIDE_GPU_TYPE": GPU_TYPES[0],
+            # NCCL multi-GPU koordináció a 8x B200-hoz
+            "NCCL_DEBUG": "INFO",
+            "NCCL_IB_DISABLE": "0",
+            "CUDA_VISIBLE_DEVICES": ",".join(str(i) for i in range(GPU_COUNT)),
         })
 
         train_stdout_path = WORK_DIR / "train_stdout.log"
         train_stderr_path = WORK_DIR / "train_stderr.log"
 
         train_start = time.time()
-        with open(train_stdout_path, "w", encoding="utf-8") as tout, open(train_stderr_path, "w", encoding="utf-8") as terr:
+        with open(train_stdout_path, "w", encoding="utf-8") as tout, \
+             open(train_stderr_path, "w", encoding="utf-8") as terr:
             train_result = subprocess.run(
                 train_args,
                 stdout=tout,
@@ -266,6 +304,7 @@ def train_jaide_rsf(
             parameters=None,
         )
 
+
 @app.function(image=image, volumes={str(MODELS_DIR): volume})
 def list_models() -> ListModelsResult:
     volume.reload()
@@ -312,6 +351,7 @@ def list_models() -> ListModelsResult:
         training_logs=sorted(logs, key=_ts, reverse=True),
     )
 
+
 @app.function(image=image, volumes={str(MODELS_DIR): volume})
 def get_model_bytes(model_filename: str) -> bytes:
     volume.reload()
@@ -324,6 +364,7 @@ def get_model_bytes(model_filename: str) -> bytes:
         raise FileNotFoundError(f"Model not found: {safe_name}")
 
     return model_path.read_bytes()
+
 
 @app.local_entrypoint()
 def main(
@@ -338,9 +379,12 @@ def main(
 ):
     separator = "=" * 70
     print(separator)
-    print("JAIDE v40 - RSF Training")
+    print("JAIDE v40 - RSF Training (distributed_trainer_futhark.zig)")
     print(separator)
-    print("Configuration:")
+    print("Architektúra: valódi RSF + Futhark GPU kernelek + NCCL allReduce")
+    print(f"GPU:           {DEFAULT_GPU_CONFIG}")
+    print(separator)
+    print("Konfiguráció:")
     print(f"  Epochs:            {epochs}")
     print(f"  Batch Size:        {batch_size}")
     print(f"  Learning Rate:     {learning_rate}")
